@@ -307,6 +307,8 @@ static VkPresentModeKHR present_mode(void) {
 
 static VkRenderPass sc_pass;
 static VkFramebuffer sc_fb[8];
+static int sc_req_w, sc_req_h;  // the window's pixel size the swapchain was made for (its extent may differ: MoltenVK)
+static bool sc_stale;           // the surface's size changed under the swapchain (SUBOPTIMAL): recreate when it settles
 
 static void create_swapchain(void) {
     VkSurfaceCapabilitiesKHR caps;
@@ -344,6 +346,7 @@ static void create_swapchain(void) {
     if (sc_pass && sf.format != g_vk.sc_format) { vkDestroyRenderPass(g_vk.dev, sc_pass, NULL); sc_pass = VK_NULL_HANDLE; }
     g_vk.sc_format = sf.format;
     g_vk.sc_extent = ext;
+    sc_req_w = w, sc_req_h = h, sc_stale = false;
     if (!sc_pass) {  // the window image: cleared, then presented (copied from for screenshots first)
         VkAttachmentDescription a = {.format = sf.format, .samples = VK_SAMPLE_COUNT_1_BIT, .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                                      .storeOp = VK_ATTACHMENT_STORE_OP_STORE, .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
@@ -372,6 +375,15 @@ static void create_swapchain(void) {
         VK_CHECK(vkCreateFramebuffer(g_vk.dev, &fi, NULL, &sc_fb[i]));
     }
     LOG("[vk] swapchain %ux%u, %u images, format %d\n", ext.width, ext.height, g_vk.sc_count, sf.format);
+}
+
+// SUBOPTIMAL: only a change of the surface's own size counts (MoltenVK reports it while a window animates).
+static void check_suboptimal(void) {
+    VkSurfaceCapabilitiesKHR caps;
+    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_vk.phys, g_vk.surface, &caps) != VK_SUCCESS) return;
+    if (caps.currentExtent.width != UINT32_MAX &&
+        (caps.currentExtent.width != g_vk.sc_extent.width || caps.currentExtent.height != g_vk.sc_extent.height))
+        sc_stale = true;
 }
 
 static void recreate_swapchain(void) {
@@ -405,7 +417,14 @@ static bool frame_begin(void) {
     int w, h;
     SDL_GetWindowSizeInPixels(ui_window(), &w, &h);
     if (!w || !h) return false;  // minimised
-    if (!g_vk.swapchain || (uint32_t)w != g_vk.sc_extent.width || (uint32_t)h != g_vk.sc_extent.height) recreate_swapchain();
+    // Recreate once the window has held its new pixel size for a few frames: during a full-screen switch or a live
+    // resize it changes every frame, each recreation waits for the GPU, and on macOS SDL's size and the Metal layer's
+    // (MoltenVK's currentExtent) disagree until the animation ends - leaving full screen recreated it 85 frames in a
+    // row. Until then the current images are drawn and scaled to the window.
+    static int last_w, last_h, held;
+    if (w != last_w || h != last_h) last_w = w, last_h = h, held = 0;
+    else if (held < 3) held++;
+    if (!g_vk.swapchain || (held >= 3 && (sc_stale || w != sc_req_w || h != sc_req_h))) recreate_swapchain();
     if (!g_vk.swapchain) return false;
     slot = (slot + 1) % FRAMES;
     if (!acquire_sem[slot]) acquire_sem[slot] = binary_semaphore();
@@ -416,6 +435,7 @@ static bool frame_begin(void) {
         r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
     }
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) { LOG("[vk] acquire failed: %d\n", r); return false; }
+    if (r == VK_SUBOPTIMAL_KHR) check_suboptimal();
     cur_frame.acquired = acquire_sem[slot];
     slot_seq[slot] = vk_pending_seq();
     VkCommandBuffer cb = vk_cmd();
@@ -463,7 +483,8 @@ static void frame_end(const char *shot_path) {
     VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1, .pWaitSemaphores = &done_sem[img],
                            .swapchainCount = 1, .pSwapchains = &g_vk.swapchain, .pImageIndices = &img};
     VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) recreate_swapchain();
+    if (r == VK_ERROR_OUT_OF_DATE_KHR) sc_stale = true;  // (the next acquire recreates it at once)
+    else if (r == VK_SUBOPTIMAL_KHR) check_suboptimal();
     cur_frame.ok = false;
     if (shot_path) {
         vk_wait_seq(seq);
