@@ -1,5 +1,5 @@
 # MHGU Recomp build
-# Windows: MSYS2 UCRT64 (clang, lld, make; see README.md). Linux: clang (planned).
+# Windows: MSYS2 UCRT64 (clang, lld, make; see README.md). Linux: clang. macOS: Xcode's clang + Homebrew libraries.
 #
 #   make gen GAME=<folder with exefs/ and romfs/>   recompile the game code from your own dump into generated/
 #   make -j4                                        build build/mhgurecomp(.exe) and the game code library, with its
@@ -8,6 +8,8 @@
 UNAME := $(shell uname -s)
 ifneq ($(filter MINGW% MSYS% CYGWIN% Windows_NT,$(UNAME) $(OS)),)
 PLATFORM := windows
+else ifeq ($(UNAME),Darwin)
+PLATFORM := darwin
 else
 PLATFORM := linux
 endif
@@ -18,7 +20,11 @@ B        ?= build
 O        ?= obj
 CC       := clang
 CXX      := clang++
+ifeq ($(PLATFORM)-$(shell uname -m),darwin-arm64)
+GENARCH  ?= -mcpu=apple-m1    # Apple Silicon
+else
 GENARCH  ?= -march=x86-64-v3  # AVX2 + FMA (Haswell or newer)
+endif
 GENFLAGS := -O1 -fno-strict-aliasing -ffp-contract=off -fno-math-errno -Wno-return-type -Wno-unused-label \
             -Wno-parentheses-equality -Wno-unused-value -fvisibility=hidden -Iruntime $(GENARCH)
 
@@ -40,6 +46,16 @@ LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 -lSDL3 -lavformat -lavcodec -lavut
             -Wl,--export-all-symbols -Wl,--out-implib,$(O)/mhgurecomp.dll.a
 GAMELIB  := $(B)/mhgugame.dll
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(O)/mhgurecomp.dll.a
+else ifeq ($(PLATFORM),darwin)
+# Homebrew: SDL3 ffmpeg shaderc vulkan-loader vulkan-headers molten-vk (README.md); VMA in third_party/vk_mem_alloc
+BREW     ?= $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
+EXE      := $(B)/mhgurecomp
+OSFLAGS  := -I$(BREW)/include
+GENFLAGS += -fPIC
+LDFLAGS  := -L$(BREW)/lib -rdynamic -lSDL3 -lavformat -lavcodec -lavutil -lvulkan -lshaderc_shared -lpthread -lm
+GAMELIB  := $(B)/mhgugame.dylib
+# (a Mach-O bundle: the game code's imports of runtime functions resolve against the executable at link time)
+GAMELIB_LDFLAGS := -bundle -bundle_loader $(EXE)
 else
 EXE      := $(B)/mhgurecomp
 OSFLAGS  :=
@@ -60,7 +76,7 @@ IMGUI    := third_party/cimgui
 IMGUI_SRC := $(IMGUI)/cimgui.cpp $(addprefix $(IMGUI)/imgui/,imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_demo.cpp)
 IMGUI_SRC += $(if $(filter 1,$(NULL_GPU)),,$(IMGUI)/imgui/backends/imgui_impl_vulkan.cpp)
 IMGUI_OBJ := $(patsubst $(IMGUI)/%.cpp,$(O)/imgui/%.o,$(IMGUI_SRC))
-IMGUIFLAGS := -O2 -g -DCIMGUI_NO_EXPORT -I$(IMGUI) -I$(IMGUI)/imgui
+IMGUIFLAGS := -std=gnu++17 -O2 -g -DCIMGUI_NO_EXPORT -I$(IMGUI) -I$(IMGUI)/imgui
 # (vendored VulkanMemoryAllocator fallback: -I on a missing dir is ignored, so MSYS2 builds
 # with the system vulkan-memory-allocator package are unaffected)
 RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Ithird_party/vk_mem_alloc -I$(IMGUI) $(OSFLAGS)
@@ -99,15 +115,15 @@ $(O)/rt/forge_imgui.o: RTFLAGS += -DCIMGUI_NO_EXPORT -Wno-unused-variable
 
 $(O)/rt/overlay.o: runtime/overlay.cpp runtime/overlay.h runtime/forge.h
 	@mkdir -p $(dir $@)
-	$(CXX) $(IMGUIFLAGS) $(if $(filter 1,$(NULL_GPU)),-DMHGU_NULL_BACKEND) -Wall -Iruntime -c $< -o $@
+	$(CXX) $(IMGUIFLAGS) $(if $(filter 1,$(NULL_GPU)),-DMHGU_NULL_BACKEND) -Wall -Iruntime $(OSFLAGS) -c $< -o $@
 
 $(O)/imgui/%.o: $(IMGUI)/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(IMGUIFLAGS) -w -c $< -o $@
+	$(CXX) $(IMGUIFLAGS) $(OSFLAGS) -w -c $< -o $@
 
 $(O)/rt/nvn/vulkan/vma.o: runtime/nvn/vulkan/vma.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) -O2 -w -Ithird_party/vk_mem_alloc -c $< -o $@
+	$(CXX) -O2 -w -Ithird_party/vk_mem_alloc $(OSFLAGS) -c $< -o $@
 
 $(EXE): $(RT_OBJ)
 	@mkdir -p $(dir $@)
@@ -129,6 +145,8 @@ PY := $(firstword $(wildcard tools/venv/Scripts/python.exe) $(wildcard tools/ven
 bundle: $(EXE) $(if $(GEN_SRC),$(GAMELIB))
 	@$(PY) tools/bundle_dlls.py "$$(cygpath -m "$$(dirname "$$(command -v $(CC))")")" $(B) $^
 
+# (macOS: APFS clones, as free as hard links, which BSD cp can't make for a folder)
+CPLINK := $(if $(filter darwin,$(PLATFORM)),cp -cR,cp -rl)
 data: $(B)/data/.complete
 $(B)/data/.complete:
 	@if [ ! -f "$(GAME)/exefs/main" ] || [ ! -d "$(GAME)/romfs" ]; then \
@@ -136,7 +154,7 @@ $(B)/data/.complete:
 	else \
 	    mkdir -p $(B)/data && for d in exefs romfs; do \
 	        rm -rf "$(B)/data/$$d.tmp"; \
-	        cp -rl "$(GAME)/$$d" "$(B)/data/$$d.tmp" 2>/dev/null || { rm -rf "$(B)/data/$$d.tmp"; \
+	        $(CPLINK) "$(GAME)/$$d" "$(B)/data/$$d.tmp" 2>/dev/null || { rm -rf "$(B)/data/$$d.tmp"; \
 	            echo "data: no hard links here, copying $$d"; cp -r "$(GAME)/$$d" "$(B)/data/$$d.tmp"; } || exit 1; \
 	        rm -rf "$(B)/data/$$d" && mv "$(B)/data/$$d.tmp" "$(B)/data/$$d" || exit 1; \
 	    done && touch $@ && echo "data: game files in $(B)/data"; \
@@ -154,6 +172,6 @@ test-lift:
 runtime-objs: $(RT_OBJ)
 
 clean:  # (keeps $(B)/data, and the settings, caches and saves wherever the game ran)
-	rm -rf $(O) $(B)/*.dll $(B)/*.so $(EXE) $(B)/vkprobe.exe
+	rm -rf $(O) $(B)/*.dll $(B)/*.so $(B)/*.dylib $(EXE) $(B)/vkprobe.exe
 
 .PHONY: all gen test-lift runtime-objs clean bundle data FORCE

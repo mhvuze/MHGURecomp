@@ -278,6 +278,27 @@ own Vulkan driver (dzn, Vulkan on Direct3D 12) can't create the renderer's pipel
 one with `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json`. WSLg can't capture the mouse (clicks still work as
 buttons), and screenshots come out black there.
 
+### macOS (work in progress)
+
+Apple Silicon, with Xcode's command line tools and [Homebrew](https://brew.sh). The Makefile picks
+`runtime/platform/darwin.c` when `uname -s` is `Darwin`; rendering goes through MoltenVK (Vulkan on Metal).
+Status: the runtime builds and starts, MoltenVK is found; the game itself has not been recompiled or run on a Mac yet.
+
+```bash
+brew install sdl3 ffmpeg shaderc vulkan-loader vulkan-headers molten-vk python@3.12
+mkdir -p third_party/vk_mem_alloc && curl -fL -o third_party/vk_mem_alloc/vk_mem_alloc.h \
+  https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/v3.4.0/include/vk_mem_alloc.h
+python3.12 -m venv tools/venv && tools/venv/bin/pip install -r tools/requirements.txt
+make gen GAME=../mhgu/game       # as above: the folder holding exefs/ and romfs/
+make -j10 GAME=../mhgu/game      # NULL_GPU=1: without the renderer
+cd build && ./mhgurecomp
+```
+
+`build/` holds `mhgurecomp`, `mhgugame.dylib` and `data/` (APFS clones of your game files: no extra disk space).
+Saves go to `~/Library/Application Support/MHGURecomp/save`, same layout as on Windows and Linux. Under lldb, the
+first touch of each guest page stops with `EXC_BAD_ACCESS`; let the runtime's handler take it with
+`process handle SIGSEGV SIGBUS -n false -p true -s false`.
+
 ## Repository layout
 
 | Folder | What's in it |

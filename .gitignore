@@ -4,6 +4,10 @@
 /obj/
 /build-linux/
 /obj-linux/
+/build-vk/
+/obj-vk/
+/third_party/vk_mem_alloc/
+*.dylib
 /run/
 /game/
 /save/
