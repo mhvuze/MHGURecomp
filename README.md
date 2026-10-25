@@ -282,7 +282,7 @@ buttons), and screenshots come out black there.
 
 Apple Silicon, with Xcode's command line tools and [Homebrew](https://brew.sh). The Makefile picks
 `runtime/platform/darwin.c` when `uname -s` is `Darwin`; rendering goes through MoltenVK (Vulkan on Metal).
-Status: the runtime builds and starts, MoltenVK is found; the game itself has not been recompiled or run on a Mac yet.
+Status: plays at 60 fps on an M1 Pro (hunts, movies, audio, controller with rumble).
 
 ```bash
 brew install sdl3 ffmpeg shaderc vulkan-loader vulkan-headers molten-vk python@3.12
@@ -293,6 +293,19 @@ make gen GAME=../mhgu/game       # as above: the folder holding exefs/ and romfs
 make -j10 GAME=../mhgu/game      # NULL_GPU=1: without the renderer
 cd build && ./mhgurecomp
 ```
+
+To play from Finder, make an app of the build:
+
+```bash
+make app GAME=../mhgu/game       # app/MHGURecomp.app
+```
+
+`app/MHGURecomp.app` is self-contained: the runtime, the game code, your game files (APFS clones: no extra space on
+the same disk), the Homebrew libraries it uses and MoltenVK, signed ad hoc for your Mac. Move it to Applications if
+you like. Everything it writes goes to `~/Library/Application Support/MHGURecomp`: `mhgurecomp.ini`, `mods/`,
+`cheats/`, `log.txt`, the shader caches and the saves. Its first start warms the game's shaders in the background
+(about 6 minutes on an M1 Pro; the log says how far). **The app contains game code and data made from your dump:
+never share it.**
 
 `build/` holds `mhgurecomp`, `mhgugame.dylib` and `data/` (APFS clones of your game files: no extra disk space).
 Saves go to `~/Library/Application Support/MHGURecomp/save`, same layout as on Windows and Linux. Under lldb, the

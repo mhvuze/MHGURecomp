@@ -164,6 +164,12 @@ gen:
 	cd tools && ../$(PY) gen.py sdk ../$(GAME)/exefs/sdk 0x02400000 ../$(GEN)/sdk --hle ../runtime/hle/hle_symbols.txt
 	cd tools && ../$(PY) gen.py main ../$(GAME)/exefs/main 0x00200000 ../$(GEN)/main
 
+# macOS: a self-contained app of the build (tools/make_app.py): runtime, game code, game files (APFS clones), the
+# Homebrew libraries and MoltenVK; it writes to ~/Library/Application Support/MHGURecomp. For you only: never share it.
+APP ?= app/MHGURecomp.app
+app: all
+	python3 tools/make_app.py $(B) $(GAME) $(APP)
+
 # differential test of the recompiler against Unicorn (tools/test_lift.py)
 test-lift:
 	cd tools && ../$(PY) test_lift.py ../$(GAME)/exefs/main 0x00200000 --tests 6000
@@ -174,4 +180,4 @@ runtime-objs: $(RT_OBJ)
 clean:  # (keeps $(B)/data, and the settings, caches and saves wherever the game ran)
 	rm -rf $(O) $(B)/*.dll $(B)/*.so $(B)/*.dylib $(EXE) $(B)/vkprobe.exe
 
-.PHONY: all gen test-lift runtime-objs clean bundle data FORCE
+.PHONY: all app gen test-lift runtime-objs clean bundle data FORCE

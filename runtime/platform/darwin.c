@@ -155,6 +155,15 @@ void plat_init(void) {
     // send() on a dropped Local Play connection gives EPIPE here instead of killing the process: Windows reports
     // WSAEPIPE to the caller, which is what nn::socket expects.
     signal(SIGPIPE, SIG_IGN);
+    // An app bundle carries its own MoltenVK (tools/make_app.py): the Vulkan loader takes that one only, not also one
+    // installed on the system. Set before SDL makes the window: the loader reads its drivers on the first query.
+    // An explicit setting in the environment wins.
+    char exe[PATH_MAX], icd[PATH_MAX + 64];
+    if (plat_in_app_bundle() && plat_exe_path(exe, sizeof exe) && strrchr(exe, '/')) {
+        *strrchr(exe, '/') = 0;
+        snprintf(icd, sizeof icd, "%s/../Resources/vulkan/icd.d/MoltenVK_icd.json", exe);
+        setenv("VK_DRIVER_FILES", icd, 0);
+    }
 }
 
 bool plat_exe_path(char *buf, size_t size) {
@@ -172,8 +181,17 @@ bool plat_exe_path(char *buf, size_t size) {
 // stderr (Finder, `open`) the log goes to log.txt and plat_fatal_notice then points the player at it.
 static bool g_own_log;
 
-void plat_standalone(void) {
+// Inside an app bundle (<name>.app/Contents/MacOS/<exe>, tools/make_app.py)? The game files are in the bundle
+// (Contents/MacOS/data -> ../Resources/data), and everything the game writes goes to the player's folder: an app's
+// bundle is sealed by its signature, and a rebuilt app must not take the player's mods and settings along.
+bool plat_in_app_bundle(void) {
     char exe[PATH_MAX];
+    return plat_exe_path(exe, sizeof exe) && strstr(exe, ".app/Contents/MacOS/") != NULL;
+}
+
+void plat_standalone(void) {
+    char exe[PATH_MAX], user[PATH_MAX];
+    if (!getenv("MHGU_HOME") && plat_in_app_bundle() && plat_user_dir(user, sizeof user)) setenv("MHGU_HOME", user, 1);
     const char *home = getenv("MHGU_HOME");
     if (home && *home) {
         mkdir(home, 0755);
