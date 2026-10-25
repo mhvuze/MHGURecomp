@@ -18,4 +18,8 @@ void renderer_sync(void) {}
 uint64_t renderer_fence_seq(void) { return 0; }
 void renderer_wait_seq(uint64_t seq) { (void)seq; }
 void renderer_flush(void) {}
+// Vulkan backend debug hooks that host_input.c reaches (keys, MHGU_CONTROL): nothing to do without it.
+volatile int g_gpuprof_request, g_shadow_scissor_mode, g_clear_draw = -1;
+void vk_cycle_msaa(void) {}
+void vk_set_msaa(uint32_t n) { (void)n; }
 #endif
