@@ -162,7 +162,7 @@ void plat_init(void) {
     if (plat_in_app_bundle() && plat_exe_path(exe, sizeof exe) && strrchr(exe, '/')) {
         *strrchr(exe, '/') = 0;
         snprintf(icd, sizeof icd, "%s/../Resources/vulkan/icd.d/MoltenVK_icd.json", exe);
-        setenv("VK_DRIVER_FILES", icd, 0);
+        if (access(icd, R_OK) == 0) setenv("VK_DRIVER_FILES", icd, 0);  // (a bundle without one: the system's)
     }
 }
 
