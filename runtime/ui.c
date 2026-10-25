@@ -32,6 +32,27 @@ static void fit_desktop(int *w, int *h) {
     *w = fw, *h = fh;
 }
 
+// The window in the picture's shape, so it shows no bars: the desktop or the window manager may make it narrower than
+// asked (macOS Stage Manager keeps a strip at the left: 1480x833 came out 1291x833), and the other side follows.
+// Resizing by hand keeps the shape too (the aspect ratio lock set at creation).
+static void fit_picture(void) {
+    float a = (float)g_config.render_w / (float)g_config.render_h;
+    int w = 0, h = 0, pw = 0, ph = 0;
+    SDL_SyncWindow(window);
+    SDL_GetWindowSize(window, &w, &h);
+    if (!w || !h || (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN)) return;
+    int fw = w, fh = h;
+    if ((float)w / (float)h > a + 0.01f) fw = (int)((float)h * a + 0.5f);
+    else if ((float)w / (float)h < a - 0.01f) fh = (int)((float)w / a + 0.5f);
+    if (fw != w || fh != h) {
+        SDL_SetWindowSize(window, fw, fh);
+        SDL_SyncWindow(window);
+    }
+    SDL_GetWindowSize(window, &fw, &fh);
+    SDL_GetWindowSizeInPixels(window, &pw, &ph);
+    LOG("[ui] window %dx%d (%dx%d pixels)%s\n", fw, fh, pw, ph, fw != w || fh != h ? ", narrowed to the picture's shape" : "");
+}
+
 // Full screen as the settings say (exclusive: the monitor mode closest to Resolution; else borderless desktop), or
 // windowed. The cursor only shows in a window.
 static void set_fullscreen(bool on) {
@@ -56,6 +77,7 @@ static void set_fullscreen(bool on) {
         SDL_SyncWindow(window);
         fit_desktop(&win_w, &win_h);
         SDL_SetWindowSize(window, win_w, win_h);
+        fit_picture();
         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
     if (on) SDL_HideCursor(); else SDL_ShowCursor();
@@ -73,6 +95,9 @@ void ui_init(void) {
     if (getenv("MHGU_HIDDEN")) flags |= SDL_WINDOW_HIDDEN;
     window = SDL_CreateWindow("Monster Hunter Generations Ultimate", win_w, win_h, flags);
     if (!window) FATAL("SDL_CreateWindow: %s\n", SDL_GetError());
+    float a = (float)g_config.render_w / (float)g_config.render_h;
+    SDL_SetWindowAspectRatio(window, a, a);
+    fit_picture();
     if (g_config.display_mode != DISPLAY_WINDOWED) set_fullscreen(true);
 }
 
