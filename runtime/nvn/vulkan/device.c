@@ -550,12 +550,24 @@ void backend_present(NvnTexture *t) {
     vk_unlock();
     static int fps = -1;
     if (fps < 0) fps = getenv("MHGU_FPS") != NULL;
-    static uint64_t t0, n0;
+    static uint64_t t0, n0, prev;
+    static float ft[1024];  // (MHGU_FPS) frame times of the window, ms: present to present
+    static int nft;
     uint64_t now = plat_now_ns();
     if (!t0) t0 = now;
+    if (fps && prev && nft < 1024) ft[nft++] = (float)((now - prev) / 1e6);
+    prev = now;
     if (now - t0 >= 2000000000ull) {
-        if (fps) LOG("[vk] %.1f fps (frame %llu)\n", (g_frames - n0) * 1e9 / (double)(now - t0), (unsigned long long)g_frames);
-        t0 = now, n0 = g_frames;
+        if (fps && nft) {  // pacing: percentiles, and hitches = frames taking more than 1.5 frame periods of the target
+            for (int i = 1; i < nft; i++) { float v = ft[i]; int j = i; for (; j > 0 && ft[j - 1] > v; j--) ft[j] = ft[j - 1]; ft[j] = v; }
+            float period = 1000.0f / (float)(g_config.fps > 0 ? g_config.fps : 60);
+            int hitches = 0;
+            for (int i = 0; i < nft; i++) hitches += ft[i] > 1.5f * period;
+            LOG("[vk] %.1f fps (frame %llu) | frame ms p50 %.1f p95 %.1f p99 %.1f max %.1f | %d over %.1f ms\n",
+                (g_frames - n0) * 1e9 / (double)(now - t0), (unsigned long long)g_frames, ft[nft / 2], ft[nft * 95 / 100],
+                ft[nft * 99 / 100], ft[nft - 1], hitches, 1.5f * period);
+        }
+        t0 = now, n0 = g_frames, nft = 0;
     }
 }
 
