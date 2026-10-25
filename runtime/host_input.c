@@ -234,17 +234,19 @@ static void control_poll(void) {
                 textinput_type(t);
                 continue;
             }
-            if (!strcmp(cmd, "sdlkey")) {  // sdlkey [ctrl+]<SDL key name>: a key pressed and released (Insert: Forge's menu)
-                bool ctrl = !SDL_strncasecmp(arg, "ctrl+", 5);
-                SDL_Scancode sc = SDL_GetScancodeFromName(arg + (ctrl ? 5 : 0));
+            if (!strcmp(cmd, "sdlkey")) {  // sdlkey [ctrl+|alt+]<SDL key name>: a key pressed and released (Insert: Forge's
+                                           // menu; alt+Return: full screen <-> window)
+                bool ctrl = !SDL_strncasecmp(arg, "ctrl+", 5), alt = !SDL_strncasecmp(arg, "alt+", 4);
+                SDL_Scancode sc = SDL_GetScancodeFromName(arg + (ctrl ? 5 : alt ? 4 : 0));
                 SDL_Event e = {0};
                 e.key.type = SDL_EVENT_KEY_DOWN, e.key.scancode = sc, e.key.key = SDL_GetKeyFromScancode(sc, 0, false);
-                e.key.down = true, e.key.mod = ctrl ? SDL_KMOD_LCTRL : 0;
+                e.key.down = true, e.key.mod = ctrl ? SDL_KMOD_LCTRL : alt ? SDL_KMOD_LALT : 0;
                 SDL_PushEvent(&e);
                 e.key.type = SDL_EVENT_KEY_UP, e.key.down = false;
                 SDL_PushEvent(&e);
-                if (ctrl) {  // (then Ctrl's own release, as a keyboard sends it: no modifier left)
-                    e.key.scancode = SDL_SCANCODE_LCTRL, e.key.key = SDLK_LCTRL, e.key.mod = 0;
+                if (ctrl || alt) {  // (then the modifier's own release, as a keyboard sends it: no modifier left)
+                    e.key.scancode = ctrl ? SDL_SCANCODE_LCTRL : SDL_SCANCODE_LALT, e.key.key = ctrl ? SDLK_LCTRL : SDLK_LALT;
+                    e.key.mod = 0;
                     SDL_PushEvent(&e);
                 }
                 LOG("[control] key %s (%d)\n", arg, (int)sc);
