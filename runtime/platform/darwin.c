@@ -14,6 +14,7 @@
 #include <execinfo.h>
 #include <limits.h>
 #include <mach-o/dyld.h>
+#include <pthread.h>
 #include <sched.h>
 #include <signal.h>
 #include <spawn.h>
@@ -21,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/event.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/ucontext.h>
@@ -113,15 +115,38 @@ int plat_protect(uint64_t addr, uint64_t size, int prot) {
 // ---- time
 uint64_t plat_now_ns(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
 
+// macOS lets an ordinary sleep wake late, to coalesce timers: a 12.4 ms nanosleep (the engine's frame limiter, which
+// sleeps to ~1 ms before its deadline and spins the rest) woke ~3.1 ms late at the median, so 60 fps came out as 57.
+// A kqueue timer with NOTE_CRITICAL opts out of that (measured: 45 us median, 0.7 ms p99). One kqueue per thread,
+// closed when the thread ends.
+static pthread_key_t kq_key;
+static pthread_once_t kq_once = PTHREAD_ONCE_INIT;
+static void kq_close(void *p) { close((int)(intptr_t)p - 1); }
+static void kq_key_init(void) { pthread_key_create(&kq_key, kq_close); }
+
+static int thread_kqueue(void) {
+    pthread_once(&kq_once, kq_key_init);
+    int kq = (int)(intptr_t)pthread_getspecific(kq_key) - 1;  // (stored + 1: 0 = none yet)
+    if (kq < 0 && (kq = kqueue()) >= 0) pthread_setspecific(kq_key, (void *)(intptr_t)(kq + 1));
+    return kq;
+}
+
 void plat_sleep_until_ns(uint64_t t) {
     for (;;) {
         uint64_t now = plat_now_ns();
         if (now >= t) return;
         uint64_t left = t - now;
         if (left < 200000) { sched_yield(); continue; }  // (the last bit: spinning beats a syscall)
-        left -= 100000;  // (wake a little early: nanosleep overshoots, the loop spins the rest)
-        struct timespec d = {(time_t)(left / 1000000000ull), (long)(left % 1000000000ull)};
-        nanosleep(&d, NULL);  // (EINTR: the loop re-reads the clock)
+        left -= 100000;  // (wake a little early, the loop spins the rest)
+        int kq = thread_kqueue();
+        if (kq >= 0) {
+            struct kevent ev;
+            EV_SET(&ev, 1, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_NSECONDS | NOTE_CRITICAL, (int64_t)left, NULL);
+            kevent(kq, &ev, 1, &ev, 1, NULL);  // (EINTR: the loop re-reads the clock)
+        } else {
+            struct timespec d = {(time_t)(left / 1000000000ull), (long)(left % 1000000000ull)};
+            nanosleep(&d, NULL);
+        }
     }
 }
 
