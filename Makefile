@@ -54,7 +54,7 @@ OSFLAGS  := -I$(BREW)/include
 GENFLAGS += -fPIC
 LDFLAGS  := -L$(BREW)/lib -rdynamic -lSDL3 -lavformat -lavcodec -lavutil -lvulkan -lshaderc_shared -lpthread -lm \
             -framework Cocoa
-RT_OBJC  := runtime/platform/darwin_menu.m  # (the Settings menu in the menu bar)
+RT_OBJC  := runtime/platform/darwin_menu.m runtime/platform/darwin_settings.m  # (the Settings menu and window)
 GAMELIB  := $(B)/mhgugame.dylib
 # (a Mach-O bundle: the game code's imports of runtime functions resolve against the executable at link time)
 GAMELIB_LDFLAGS := -bundle -bundle_loader $(EXE)

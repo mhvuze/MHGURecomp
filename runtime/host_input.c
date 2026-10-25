@@ -283,12 +283,24 @@ static void control_poll(void) {
                 test_until = plat_now_ns() + (uint64_t)atoi(arg3) * 1000000ull;
                 continue;
             }
-            if (!strcmp(cmd, "set")) {  // set <Key> <Value>: as the Settings menu does (config_set, a live one applied)
-                bool live = false;
-                for (int i = 0; i < g_nsettings; i++) if (!SDL_strcasecmp(g_settings[i].key, arg)) live = g_settings[i].live;
-                if (config_set(arg, arg2) && live) ui_setting_changed(arg);
+            if (!strcmp(cmd, "set") || !strcmp(cmd, "unset")) {  // set <Key> <Value...> / unset <Quest<n>>: as the
+                                                                   // Settings window does (config_set / config_remove)
+                const char *v = strstr(line + strlen(cmd), arg);
+                char value[256] = "";
+                if (v) snprintf(value, sizeof value, "%s", v + strlen(arg) + strspn(v + strlen(arg), " \t"));
+                value[strcspn(value, "\r\n")] = 0;
+                if (!strcmp(cmd, "unset")) config_remove(arg);
+                else if (config_set(arg, value) && config_live(arg)) ui_setting_changed(arg);
+                else if (!config_check(arg, value)) LOG("[control] set %s: \"%s\" refused\n", arg, value);
                 continue;
             }
+#ifdef __APPLE__
+            if (!strcmp(cmd, "settingsshot")) {  // settingsshot <folder>: the Settings window's tabs as PNGs (macOS)
+                void plat_settings_snapshot(const char *dir);
+                plat_settings_snapshot(arg[0] ? arg : ".");
+                continue;
+            }
+#endif
             if (!strcmp(cmd, "textkey")) {
                 textinput_key(!strcmp(arg, "enter") ? TI_ENTER : !strcmp(arg, "escape") ? TI_CANCEL : TI_NONE);
                 continue;

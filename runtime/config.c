@@ -133,26 +133,43 @@ static const char DEFAULT_INI[] =
     "; Off: saves are never changed.\n"
     "BonusContent = On\n";
 
-// The settings a menu offers (config.h). Choices are written into the file as given here.
+// Every setting of the file but the per-quest Quest<number> entries (config.h), in file order: what the Settings window
+// shows and the menu offers. Values are written into the file as given here.
+#define ONOFF "On|Off"
 const ConfigSetting g_settings[] = {
-    {"Display", "Mode", "Mode", "Borderless|Fullscreen|Windowed", "Borderless (full screen)|Fullscreen (exclusive)|Windowed", true},
-    {"Display", "Resolution", "Resolution", "Desktop|1280x720|1600x900|1920x1080|2560x1440|3840x2160", NULL, false},
-    {"Display", "RenderResolution", "3D Resolution", "Auto|1280x720|1920x1080|2560x1440|3840x2160", NULL, false},
-    {"Display", "AspectRatio", "Aspect Ratio", "Auto|16:9|16:10|21:9|32:9", NULL, false},
-    {"Display", "FOV", "Field of View", "0.8|0.9|1.0|1.1|1.2|1.3|1.5", NULL, true},
-    {"Display", "UIAnchor", "HUD on Wide Screens", "Center|Edges", "Center (16:9)|Edges", false},
-    {"Anti-aliasing", "MSAA", "MSAA", "Off|2x|4x|8x", NULL, true},
-    {"Anti-aliasing", "FXAA", "FXAA", "On|Off", NULL, true},
-    {"Performance", "FPS", "Frame Rate Cap", "30|60|90|120|144|240", NULL, false},
-    {"Performance", "VSync", "VSync", "On|Off", NULL, false},
-    {"Controls", "FaceButtons", "Face Buttons", "Position|Label", "By Position (Switch layout)|By Label", true},
-    {"Controls", "BackgroundInput", "Controller in the Background", "On|Off", NULL, true},
-    {"Mouse", "MouseSensitivity", "Mouse Sensitivity", "0.5|0.75|1.0|1.5|2.0|3.0", NULL, true},
-    {"Multiplayer", "SyncSmallMonsters", "Sync Small Monsters", "On|Off", NULL, false},
-    {"Village Quests", "VillageQuestsInHub", "Village Quests in the Hub", "On|Off", NULL, true},
-    {"Bonus Content", "BonusContent", "Bonus Content", "On|Off", NULL, false},
+    {"Display", "Display", "Mode", "Mode", SETTING_CHOICE, "Borderless|Fullscreen|Windowed",
+     "Borderless (full screen)|Fullscreen (exclusive)|Windowed", true, true},
+    {"Display", "Display", "Resolution", "Resolution", SETTING_VALUE, "Desktop|1280x720|1600x900|1920x1080|2560x1440|3840x2160",
+     NULL, false, true},
+    {"Display", "Display", "RenderResolution", "3D Resolution", SETTING_VALUE, "Auto|1280x720|1920x1080|2560x1440|3840x2160",
+     NULL, false, true},
+    {"Display", "Display", "AspectRatio", "Aspect Ratio", SETTING_VALUE, "Auto|16:9|16:10|21:9|32:9", NULL, false, true},
+    {"Display", "Display", "FOV", "Field of View", SETTING_VALUE, "0.8|0.9|1.0|1.1|1.2|1.3|1.5", NULL, true, true},
+    {"Display", "Display", "UIAnchor", "HUD on Wide Screens", SETTING_CHOICE, "Center|Edges|21:9|32:9",
+     "Center (16:9)|Edges|21:9|32:9", false, true},
+    {"Graphics", "Anti-aliasing", "MSAA", "MSAA", SETTING_CHOICE, "Off|2x|4x|8x", NULL, true, true},
+    {"Graphics", "Anti-aliasing", "FXAA", "FXAA", SETTING_CHOICE, ONOFF, NULL, true, true},
+    {"Graphics", "Performance", "FPS", "Frame Rate Cap", SETTING_VALUE, "30|60|90|120|144|240", NULL, false, true},
+    {"Graphics", "Performance", "VSync", "VSync", SETTING_CHOICE, ONOFF, NULL, false, true},
+    {"Controls", "Controls", "FaceButtons", "Face Buttons", SETTING_CHOICE, "Position|Label",
+     "By Position (Switch layout)|By Label", true, true},
+    {"Controls", "Controls", "BackgroundInput", "Controller in the Background", SETTING_CHOICE, ONOFF, NULL, true, true},
+    {"Controls", "Mouse", "MouseSensitivity", "Mouse Sensitivity", SETTING_VALUE, "0.5|0.75|1.0|1.5|2.0|3.0", NULL, true, true},
+    {"Multiplayer", "Multiplayer", "Port", "Port", SETTING_VALUE, "39500", NULL, false, false},
+    {"Multiplayer", "Multiplayer", "Join", "Join Addresses", SETTING_TEXT, NULL, NULL, true, false},
+    {"Multiplayer", "Multiplayer", "SyncSmallMonsters", "Sync Small Monsters", SETTING_CHOICE, ONOFF, NULL, false, true},
+    {"Monster HP", "Monster HP", "1Player", "1 Hunter", SETTING_VALUE, "0.5|0.75|1.0|1.25|1.5|2.0", NULL, true, false},
+    {"Monster HP", "Monster HP", "2Players", "2 Hunters", SETTING_VALUE, "0.5|0.75|1.0|1.25|1.5|2.0", NULL, true, false},
+    {"Monster HP", "Monster HP", "3Players", "3 Hunters", SETTING_VALUE, "0.5|0.75|1.0|1.25|1.5|2.0", NULL, true, false},
+    {"Monster HP", "Monster HP", "4Players", "4 Hunters", SETTING_VALUE, "0.5|0.75|1.0|1.25|1.5|2.0", NULL, true, false},
+    {"Multiplayer", "Village Quests", "VillageQuestsInHub", "Village Quests in the Hub", SETTING_CHOICE, ONOFF, NULL, true, true},
+    {"Multiplayer", "Village Quests", "HubHP", "Village Quest HP in the Hub", SETTING_VALUE, "1.0|1.5|2.0|3.0", NULL, true, false},
+    {"Extras", "Bonus Content", "BonusContent", "Bonus Content", SETTING_CHOICE, ONOFF, NULL, false, true},
 };
 const int g_nsettings = (int)(sizeof g_settings / sizeof g_settings[0]);
+// The per-quest Monster HP entries (Quest<number> = factors): set, listed and removed through config_set / config_quests
+// / config_remove like the table's.
+static const ConfigSetting quest_setting = {"Monster HP", "Monster HP", "Quest", "Quest", SETTING_TEXT, NULL, NULL, true, false};
 static char g_start_values[sizeof g_settings / sizeof g_settings[0]][64];  // as the game started (config_load)
 
 static void ini_path(char *buf, size_t size) {
@@ -233,7 +250,8 @@ static bool parse_anchor(const char *v, int *out) {
 static int desktop_w, desktop_h;
 static bool render_auto = true;
 
-static void set_key(const char *key, char *val, int line) {
+// A setting into g_config; false: not a value it takes (the default stays). line < 0: quiet (config_check).
+static bool set_key(const char *key, char *val, int line) {
     char k[64], v[256];
     snprintf(k, sizeof k, "%s", key);
     snprintf(v, sizeof v, "%s", val);
@@ -320,7 +338,10 @@ static void set_key(const char *key, char *val, int line) {
         if ((ok = !*end && q && (n == 1 || n == 4))) {
             int i = 0;
             while (i < h->quests && h->quest[i].quest != q) i++;
-            if (i == HP_QUESTS_MAX) { LOG("[config] line %d: more than %d quests set apart\n", line, HP_QUESTS_MAX); return; }
+            if (i == HP_QUESTS_MAX) {
+                if (line >= 0) LOG("[config] line %d: more than %d quests set apart\n", line, HP_QUESTS_MAX);
+                return false;
+            }
             h->quest[i].quest = (uint32_t)q;
             for (int j = 0; j < 4; j++) h->quest[i].scale[j] = f[n == 4 ? j : 0];
             if (i == h->quests) h->quests++;
@@ -330,10 +351,11 @@ static void set_key(const char *key, char *val, int line) {
         if (f >= 30 && f <= 240) g_config.fps = f;
         else ok = false;
     } else {
-        LOG("[config] line %d: unknown setting \"%s\" (ignored)\n", line, key);
-        return;
+        if (line >= 0) LOG("[config] line %d: unknown setting \"%s\" (ignored)\n", line, key);
+        return false;
     }
-    if (!ok) LOG("[config] line %d: \"%s\" is not a value %s takes; using the default\n", line, val, key);
+    if (!ok && line >= 0) LOG("[config] line %d: \"%s\" is not a value %s takes; using the default\n", line, val, key);
+    return ok;
 }
 
 static char *trim(char *s) {
@@ -539,25 +561,117 @@ bool config_restart_pending(const char *key) {
     return false;
 }
 
-bool config_set(const char *key, const char *value) {
-    const ConfigSetting *st = NULL;
-    for (int i = 0; i < g_nsettings; i++) if (!strcmp(g_settings[i].key, key)) st = &g_settings[i];
+static bool is_quest_key(const char *key) {
+    return !strncasecmp(key, "quest", 5) && isdigit((unsigned char)key[5]) && strspn(key + 5, "0123456789") == strlen(key + 5);
+}
+
+static const ConfigSetting *setting_of(const char *key) {
+    for (int i = 0; i < g_nsettings; i++) if (!strcmp(g_settings[i].key, key)) return &g_settings[i];
+    return is_quest_key(key) ? &quest_setting : NULL;
+}
+
+bool config_live(const char *key) {
+    const ConfigSetting *st = setting_of(key);
+    return st && st->live;
+}
+
+bool config_check(const char *key, const char *value) {
+    const ConfigSetting *st = setting_of(key);
     if (!st) return false;
+    // (the parser drops dashes - "Borderless-Window" - so "-1" would read as 1: no dash in a number or a size)
+    if ((st->kind == SETTING_VALUE || st == &quest_setting) && strchr(value, '-')) return false;
+    Config saved = g_config;  // (set_key on the real one, then back: the parser is the judge)
+    bool ra = render_auto;
+    char v[256];
+    snprintf(v, sizeof v, "%s", value);
+    bool ok = set_key(key, v, -1);
+    g_config = saved;
+    render_auto = ra;
+    return ok;
+}
+
+bool config_help(const char *key, char *buf, size_t size) {
+    // The comment lines right above "<key> =" in DEFAULT_INI; for a key it has no line for (Quest<number>), the
+    // comment block that names it.
+    char block[2048] = "", line[512], val[256];
+    size_t n = 0;
+    buf[0] = 0;
+    for (const char *p = DEFAULT_INI; *p;) {
+        const char *e = strchr(p, '\n');
+        snprintf(line, sizeof line, "%.*s", (int)(e ? e - p : (long)strlen(p)), p);
+        p = e ? e + 1 : p + strlen(p);
+        if (line[0] == ';') {
+            const char *c = line + 1;
+            while (*c == ' ') c++;  // (and a continuation line's indent)
+            n += snprintf(block + n, n < sizeof block ? sizeof block - n : 0, "%s%s", n ? " " : "", c);
+            if (n >= sizeof block) n = sizeof block - 1;
+            continue;
+        }
+        if (line_value(line, key, val, sizeof val) || (block[0] && strstr(block, key) && !strcmp(key, "Quest"))) {
+            snprintf(buf, size, "%s", block);
+            return block[0] != 0;
+        }
+        block[0] = 0, n = 0;
+    }
+    return false;
+}
+
+void config_quests(void (*fn)(unsigned quest, const char *value, void *ctx), void *ctx) {
+    char path[1100], line[512], key[64], val[256];
+    config_path(path, sizeof path);
+    FILE *f = fopen(path, "r");
+    while (f && fgets(line, sizeof line, f)) {
+        const char *s = line, *eq = strchr(line, '=');
+        while (isspace((unsigned char)*s)) s++;
+        if (!eq || *s == ';' || *s == '#' || (size_t)(eq - s) >= sizeof key) continue;
+        snprintf(key, sizeof key, "%.*s", (int)(eq - s), s);
+        snprintf(key, sizeof key, "%s", trim(key));
+        if (is_quest_key(key) && line_value(line, key, val, sizeof val)) fn((unsigned)strtoul(key + 5, NULL, 10), val, ctx);
+    }
+    if (f) fclose(f);
+}
+
+bool config_remove(const char *key) {
+    if (!is_quest_key(key)) return false;
+    char path[1100], tmp[1200], line[512], val[256];
+    config_path(path, sizeof path);
+    snprintf(tmp, sizeof tmp, "%s.new", path);
+    FILE *f = fopen(path, "r"), *o = fopen(tmp, "w");
+    if (!f || !o) { if (f) fclose(f); if (o) fclose(o); return false; }
+    while (fgets(line, sizeof line, f))
+        if (!line_value(line, key, val, sizeof val)) fputs(line, o);
+    fclose(f);
+    if (fclose(o) != 0 || rename(tmp, path) != 0) { remove(tmp); return false; }
+    HpScale *h = &g_config.hp;  // (and from the running game's list)
+    unsigned long q = strtoul(key + 5, NULL, 10);
+    for (int i = 0; i < h->quests; i++)
+        if (h->quest[i].quest == q) { h->quest[i] = h->quest[--h->quests]; break; }
+    LOG("[config] %s removed\n", key);
+    return true;
+}
+
+bool config_set(const char *key, const char *value) {
+    const ConfigSetting *st = setting_of(key);
+    if (!st || !config_check(key, value)) return false;
+    const char *name = st == &quest_setting ? key : st->key;  // (the name written for a new line)
     char path[1100], tmp[1200], line[512], old[256];
     config_path(path, sizeof path);
     snprintf(tmp, sizeof tmp, "%s.new", path);
     FILE *f = fopen(path, "r"), *o = fopen(tmp, "w");
     if (!o) { if (f) fclose(f); return false; }
     bool done = false, in_section = false;
+    int blanks = 0;  // (blank lines held back: a key added at a section's end goes before them)
     char section[64];
     snprintf(section, sizeof section, "[%s]", st->section);
     while (f && fgets(line, sizeof line, f)) {
         const char *s = line;
         while (isspace((unsigned char)*s)) s++;
+        if (!*s) { blanks++; continue; }
         if (!done && in_section && *s == '[') {  // (the key is missing from its section: add it at the section's end)
-            fprintf(o, "%s = %s\n\n", st->key, value);
+            fprintf(o, "%s = %s\n", name, value);
             done = true;
         }
+        for (; blanks; blanks--) fputs("\n", o);
         if (*s == '[') in_section = !strncasecmp(s, section, strlen(section));
         if (!done && line_value(line, key, old, sizeof old)) {  // (the key's spelling and the line's comment stay)
             const char *eq = strchr(line, '='), *cmt = strpbrk(eq, ";#");
@@ -568,14 +682,15 @@ bool config_set(const char *key, const char *value) {
         }
         fputs(line, o);
     }
-    if (!done) fprintf(o, "%s%s\n%s = %s\n", in_section ? "" : "\n", in_section ? "" : section, st->key, value);
+    if (!done) fprintf(o, "%s%s\n%s = %s\n", in_section ? "" : "\n", in_section ? "" : section, name, value);
+    for (; blanks; blanks--) fputs("\n", o);
     if (f) fclose(f);
     if (fclose(o) != 0 || rename(tmp, path) != 0) { remove(tmp); return false; }
-    LOG("[config] %s = %s%s\n", st->key, value, st->live ? "" : " (at the next start)");
+    LOG("[config] %s = %s%s\n", name, value, st->live ? "" : " (at the next start)");
     if (st->live) {
         char v[256];
         snprintf(v, sizeof v, "%s", value);
-        set_key(st->key, v, 0);
+        set_key(name, v, 0);
         g_fov_scale = g_config.fov;  // (derived at load)
     }
     return true;

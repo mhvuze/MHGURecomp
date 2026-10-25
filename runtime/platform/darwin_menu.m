@@ -1,10 +1,12 @@
-// The Settings menu in the macOS menu bar (plat_menu_init, from runtime/ui.c once the window exists).
+// The Settings menu in the macOS menu bar (plat_menu_init, from runtime/ui.c once the window exists), and the actions
+// it shares with the Settings window (darwin_ui.h, runtime/platform/darwin_settings.m).
 //
-// Built from the settings table (runtime/config.c g_settings): a submenu per ini section, one per setting with its
-// choices, the current one checked. Choosing writes mhgurecomp.ini (config_set); a live setting takes effect at once
-// (runtime/ui.c ui_setting_changed), the others are marked until "Restart to Apply". What the table leaves out
-// (multiplayer addresses, monster HP factors...) is edited in the file: "Edit Settings File...". Below: the folders
-// the game keeps its files in (the settings folder is the game's home: mods/, cheats/, log.txt, caches).
+// "Settings..." (Cmd-,) opens the window, which has every setting. The menu offers the common ones (the settings
+// table's menu entries: runtime/config.c g_settings) for a quick change, even in full screen: a submenu per ini
+// section, one per setting with its choices, the current one checked. Choosing writes mhgurecomp.ini (config_set); a
+// live setting takes effect at once (runtime/ui.c ui_setting_changed), the others are marked until "Restart to
+// Apply". Below: the settings file, and the folders the game keeps its files in (the settings folder is the game's
+// home: mods/, cheats/, log.txt, caches).
 #import <Cocoa/Cocoa.h>
 
 #include <SDL3/SDL_events.h>
@@ -15,6 +17,7 @@
 
 #include "../config.h"
 #include "../platform.h"
+#include "darwin_ui.h"
 
 extern const char *g_save_dir;  // (runtime/main.c)
 void ui_setting_changed(const char *key);  // (runtime/ui.c)
@@ -33,15 +36,19 @@ static NSArray<NSString *> *split(const char *s) {
 }
 
 // This screen's size in pixels, below the camera housing where it has one (full screen windows stay below it).
-static NSString *screen_size(void) {
+const char *plat_screen_size(void) {
+    static char buf[32];
     NSScreen *sc = NSScreen.mainScreen;
-    if (!sc) return nil;
+    if (!sc) return NULL;
     CGFloat h = sc.frame.size.height;
     if (@available(macOS 12.0, *)) h -= sc.safeAreaInsets.top;
     CGFloat k = sc.backingScaleFactor;
-    long w = lround(sc.frame.size.width * k) & ~1L, hh = lround(h * k) & ~1L;
-    return [NSString stringWithFormat:@"%ldx%ld", w, hh];
+    snprintf(buf, sizeof buf, "%ldx%ld", lround(sc.frame.size.width * k) & ~1L, lround(h * k) & ~1L);
+    return buf;
 }
+static NSString *screen_size(void) { return plat_screen_size() ? str(plat_screen_size()) : nil; }
+
+const char *plat_home(void) { return g_home; }
 
 @implementation MHGUSettingsMenu
 
@@ -49,8 +56,8 @@ static NSString *screen_size(void) {
     NSArray<NSString *> *kv = item.representedObject;
     const char *key = kv[0].UTF8String, *value = kv[1].UTF8String;
     if (!config_set(key, value)) { NSBeep(); return; }
-    for (int i = 0; i < g_nsettings; i++)
-        if (!strcmp(g_settings[i].key, key) && g_settings[i].live) ui_setting_changed(key);
+    if (config_live(key)) ui_setting_changed(key);
+    plat_settings_refresh();
 }
 
 // Checkmarks, and each setting's title with its current value, as a menu opens.
@@ -80,8 +87,11 @@ static NSString *screen_size(void) {
     return YES;
 }
 
-- (void)restart:(id)sender {
-    (void)sender;
+- (void)restart:(id)sender { (void)sender; plat_restart_game(); }
+- (void)showSettings:(id)sender { (void)sender; plat_settings_show(); }
+@end
+
+void plat_restart_game(void) {
     // A shell waits for this process to end, then starts the game again: the app through LaunchServices, a bare
     // executable directly (with this environment). Then the window closes as from Quit.
     char exe[PATH_MAX], cmd[3 * PATH_MAX];
@@ -101,11 +111,14 @@ static NSString *screen_size(void) {
     SDL_PushEvent(&e);
 }
 
+@implementation MHGUSettingsMenu (Folders)
+
 static void open_path(NSString *path, bool create) {
     if (create) [NSFileManager.defaultManager createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:nil];
     [NSWorkspace.sharedWorkspace openURL:[NSURL fileURLWithPath:path]];
 }
-- (void)openHome:(id)sender { (void)sender; open_path(str(g_home), false); }
+void plat_open_home(void) { open_path(str(g_home), false); }
+- (void)openHome:(id)sender { (void)sender; plat_open_home(); }
 - (void)openMods:(id)sender { (void)sender; open_path([str(g_home) stringByAppendingPathComponent:@"mods"], true); }
 - (void)openCheats:(id)sender { (void)sender; open_path([str(g_home) stringByAppendingPathComponent:@"cheats"], true); }
 - (void)openSaves:(id)sender { (void)sender; open_path(str(g_save_dir), true); }
@@ -114,8 +127,10 @@ static void open_path(NSString *path, bool create) {
     NSString *log = [str(g_home) stringByAppendingPathComponent:@"log.txt"];
     [NSWorkspace.sharedWorkspace selectFile:log inFileViewerRootedAtPath:@""];
 }
-- (void)editSettings:(id)sender {
-    (void)sender;
+- (void)editSettings:(id)sender { (void)sender; plat_edit_settings(); }
+@end
+
+void plat_edit_settings(void) {
     char path[PATH_MAX];
     config_path(path, sizeof path);
     NSURL *file = [NSURL fileURLWithPath:str(path) relativeToURL:[NSURL fileURLWithPath:str(g_home) isDirectory:YES]];
@@ -126,7 +141,6 @@ static void open_path(NSString *path, bool create) {
     else
         [NSWorkspace.sharedWorkspace openURL:file];
 }
-@end
 
 static NSMenuItem *action_item(NSString *title, SEL action, NSString *key) {
     NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:key ? key : @""];
@@ -144,8 +158,11 @@ void plat_menu_init(void) {
         menu.delegate = g_menu_target;
         NSMenu *section_menu = nil;
         const char *section = "";
+        [menu addItem:action_item(@"Settings…", @selector(showSettings:), @",")];
+        [menu addItem:NSMenuItem.separatorItem];
         for (int i = 0; i < g_nsettings; i++) {
             const ConfigSetting *st = &g_settings[i];
+            if (!st->menu) continue;
             if (strcmp(st->section, section)) {  // (a new ini section: a submenu of its own)
                 section = st->section;
                 section_menu = [[NSMenu alloc] initWithTitle:str(section)];
@@ -177,7 +194,7 @@ void plat_menu_init(void) {
         [menu addItem:action_item(@"Restart to Apply Changes", @selector(restart:), nil)];
         [menu addItem:action_item(@"Edit Settings File…", @selector(editSettings:), nil)];
         [menu addItem:NSMenuItem.separatorItem];
-        [menu addItem:action_item(@"Open Settings Folder", @selector(openHome:), @",")];
+        [menu addItem:action_item(@"Open Settings Folder", @selector(openHome:), nil)];
         [menu addItem:action_item(@"Open Mods Folder", @selector(openMods:), nil)];
         [menu addItem:action_item(@"Open Cheats Folder", @selector(openCheats:), nil)];
         [menu addItem:action_item(@"Open Saves Folder", @selector(openSaves:), nil)];
