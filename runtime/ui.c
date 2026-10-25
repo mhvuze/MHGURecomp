@@ -10,6 +10,8 @@
 #include "mods.h"
 #include "rt.h"
 
+void backend_quit(void);  // (runtime/nvn: vulkan/device.c, backend_null.c)
+
 volatile uint64_t g_present_count;
 static SDL_Window *window;
 
@@ -111,7 +113,11 @@ int ui_run(void) {
         SDL_Event e;
         if (SDL_WaitEventTimeout(&e, 4)) {
             do {
-                if (e.type == SDL_EVENT_QUIT) { LOG("window closed\n"); exit(0); }
+                if (e.type == SDL_EVENT_QUIT) {
+                    LOG("window closed\n");
+                    backend_quit();  // (before exit(): runtime/nvn/vulkan/device.c exit_handler says why)
+                    exit(0);
+                }
                 host_input_event(&e);
             } while (SDL_PollEvent(&e));
         }

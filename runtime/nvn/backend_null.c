@@ -5,6 +5,7 @@
 #ifdef MHGU_NULL_BACKEND
 static uint64_t frames;
 void backend_init(void) { LOG("[nvn] null renderer\n"); }
+void backend_quit(void) {}
 void backend_execute(uint64_t handle) { (void)handle; }
 void backend_present(NvnTexture *tex) {
     (void)tex;

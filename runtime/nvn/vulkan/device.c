@@ -615,12 +615,20 @@ void backend_present(NvnTexture *t) {
 
 // ================================================================== init
 void vk_exec_init(void);
+static bool backend_ready;  // (backend_init done: there is a device to drain on quitting)
+static void exit_handler(void);
+void backend_quit(void) {
+    if (backend_ready) exit_handler();  // (does not return)
+}
 void vk_shaders_init(void);
 
 // exit() from any thread. The atexit chain is the danger: SDL_Quit and libnvidia's own destructors tear the
 // driver down while other threads are still inside nvnQueueSubmitCommands / vkWaitSemaphores (the exit-time
 // SIGSEGV in libnvidia-glcore). So: park the guest threads (vk_lock), drain what is in flight, let the GPU
 // finish, keep the pipeline cache - and leave with _exit, running no further teardown.
+// The window closing calls it before exit() (backend_quit): exit() runs the C++ static destructors registered after
+// this handler first, and MoltenVK registers some lazily, at its first shader compile - a shader worker still building
+// a pipeline then used a destroyed one (Quit from the macOS app menu crashed in MoltenVK).
 static void exit_handler(void) {
     exiting = true;
     vk_exit_thread = pthread_self();
@@ -666,4 +674,5 @@ void backend_init(void) {
     vk_shaders_init();
     create_swapchain();
     atexit(exit_handler);
+    backend_ready = true;
 }
