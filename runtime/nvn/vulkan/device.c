@@ -21,7 +21,7 @@ VkG g_vk;
 static VkDebugUtilsMessengerEXT messenger;
 
 static pthread_mutex_t g_vk_mutex = PTHREAD_MUTEX_INITIALIZER;
-static volatile bool g_vk_owner;  // who holds it: exit() may run inside a submission, from the guest's own code
+static pthread_t volatile g_vk_owner;  // who holds it: exit() may run inside a submission, from the guest's own code
 static volatile bool exiting;     // exit() has begun: the driver's own teardown may be one step away
 static pthread_t vk_exit_thread;  // the thread running exit(): it may still enter here (the atexit handler drains)
 
@@ -583,13 +583,27 @@ static void exit_handler(void) {
     _exit(0);
 }
 
+// The window's Vulkan surface. On macOS it is a Metal view + CAMetalLayer that SDL adds to the window, which AppKit only
+// takes from the main thread: made from the game thread that initialises NVN, the layer never reached the screen
+// (a black window, frames presented without an error). The main thread is in ui_run's event loop, which runs it.
+static bool surface_ok;
+static void create_surface(void *unused) {
+    (void)unused;
+    surface_ok = SDL_Vulkan_CreateSurface(ui_window(), g_vk.inst, NULL, &g_vk.surface);
+}
+
 void backend_init(void) {
     static bool done;
     if (done) return;
     done = true;
     if (!ui_window()) FATAL("no window\n");
     create_instance();
-    if (!SDL_Vulkan_CreateSurface(ui_window(), g_vk.inst, NULL, &g_vk.surface)) FATAL("SDL_Vulkan_CreateSurface: %s\n", SDL_GetError());
+#ifdef __APPLE__
+    if (!SDL_RunOnMainThread(create_surface, NULL, true)) FATAL("SDL_RunOnMainThread: %s\n", SDL_GetError());
+#else
+    create_surface(NULL);
+#endif
+    if (!surface_ok) FATAL("SDL_Vulkan_CreateSurface: %s\n", SDL_GetError());
     pick_device();
     create_device();
     vk_exec_init();
