@@ -311,7 +311,9 @@ make app GAME=../mhgu/game       # app/MHGURecomp.app
 `app/MHGURecomp.app` is self-contained: the runtime, the game code, your game files (APFS clones: no extra space on
 the same disk), the Homebrew libraries it uses and MoltenVK, signed ad hoc for your Mac. Move it to Applications if
 you like. Everything it writes goes to `~/Library/Application Support/MHGURecomp`: `mhgurecomp.ini`, `mods/`,
-`cheats/`, `log.txt`, the shader caches and the saves. Its first start warms the game's shaders in the background
+`cheats/`, `log.txt`, the shader caches and the saves. The **Settings** menu in the menu bar changes the common settings
+(most at once, the rest after "Restart to Apply"), opens the settings file for the others, and opens those folders
+(⌘, for the settings folder). Its first start warms the game's shaders in the background
 (about 6 minutes on an M1 Pro; the log says how far). **The app contains game code and data made from your dump:
 never share it.**
 

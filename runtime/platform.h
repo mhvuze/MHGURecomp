@@ -45,6 +45,7 @@ bool plat_exe_path(char *buf, size_t size);
 void plat_standalone(void);
 #ifdef __APPLE__
 bool plat_in_app_bundle(void);  // running from a macOS .app (runtime/platform/darwin.c)
+void plat_menu_init(void);      // the Settings menu in the menu bar (runtime/platform/darwin_menu.m)
 #endif
 // The player's own folder for this game, created if missing (save data lives there, away from the game folder so a
 // rebuilt or deleted build folder can't take it along): Windows %APPDATA%\MHGURecomp.

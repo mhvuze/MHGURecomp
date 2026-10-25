@@ -133,6 +133,28 @@ static const char DEFAULT_INI[] =
     "; Off: saves are never changed.\n"
     "BonusContent = On\n";
 
+// The settings a menu offers (config.h). Choices are written into the file as given here.
+const ConfigSetting g_settings[] = {
+    {"Display", "Mode", "Mode", "Borderless|Fullscreen|Windowed", "Borderless (full screen)|Fullscreen (exclusive)|Windowed", true},
+    {"Display", "Resolution", "Resolution", "Desktop|1280x720|1600x900|1920x1080|2560x1440|3840x2160", NULL, false},
+    {"Display", "RenderResolution", "3D Resolution", "Auto|1280x720|1920x1080|2560x1440|3840x2160", NULL, false},
+    {"Display", "AspectRatio", "Aspect Ratio", "Auto|16:9|16:10|21:9|32:9", NULL, false},
+    {"Display", "FOV", "Field of View", "0.8|0.9|1.0|1.1|1.2|1.3|1.5", NULL, true},
+    {"Display", "UIAnchor", "HUD on Wide Screens", "Center|Edges", "Center (16:9)|Edges", false},
+    {"Anti-aliasing", "MSAA", "MSAA", "Off|2x|4x|8x", NULL, true},
+    {"Anti-aliasing", "FXAA", "FXAA", "On|Off", NULL, true},
+    {"Performance", "FPS", "Frame Rate Cap", "30|60|90|120|144|240", NULL, false},
+    {"Performance", "VSync", "VSync", "On|Off", NULL, false},
+    {"Controls", "FaceButtons", "Face Buttons", "Position|Label", "By Position (Switch layout)|By Label", true},
+    {"Controls", "BackgroundInput", "Controller in the Background", "On|Off", NULL, true},
+    {"Mouse", "MouseSensitivity", "Mouse Sensitivity", "0.5|0.75|1.0|1.5|2.0|3.0", NULL, true},
+    {"Multiplayer", "SyncSmallMonsters", "Sync Small Monsters", "On|Off", NULL, false},
+    {"Village Quests", "VillageQuestsInHub", "Village Quests in the Hub", "On|Off", NULL, true},
+    {"Bonus Content", "BonusContent", "Bonus Content", "On|Off", NULL, false},
+};
+const int g_nsettings = (int)(sizeof g_settings / sizeof g_settings[0]);
+static char g_start_values[sizeof g_settings / sizeof g_settings[0]][64];  // as the game started (config_load)
+
 static void ini_path(char *buf, size_t size) {
     const char *e = getenv("MHGU_CONFIG");
     if (e && *e) { snprintf(buf, size, "%s", e); return; }
@@ -455,4 +477,106 @@ void config_load(void) {
         hp->scale[0], hp->scale[1], hp->scale[2], hp->scale[3], hp->quests);
     LOG("[config] Village quests at the Hub counter: %s (their HP x%.2f first)\n", g_config.village_in_hub ? "on" : "off",
         hp->village);
+    for (int i = 0; i < g_nsettings; i++) config_get(g_settings[i].key, g_start_values[i], sizeof g_start_values[i]);
+}
+
+// ---- the settings menu's side (config.h)
+void config_path(char *buf, size_t size) { ini_path(buf, size); }
+
+// Is this line "<key> = ..." (any spacing and case)? Its value then, trimmed, without a comment.
+static bool line_value(const char *line, const char *key, char *val, size_t size) {
+    char k[64], want[64];
+    const char *eq = strchr(line, '=');
+    const char *s = line;
+    while (isspace((unsigned char)*s)) s++;
+    if (!eq || *s == ';' || *s == '#' || *s == '[' || (size_t)(eq - s) >= sizeof k) return false;
+    snprintf(k, sizeof k, "%.*s", (int)(eq - s), s);
+    snprintf(want, sizeof want, "%s", key);
+    squash(k);
+    squash(want);
+    if (strcmp(k, want)) return false;
+    char v[256];
+    snprintf(v, sizeof v, "%s", eq + 1);
+    char *c = strpbrk(v, ";#\r\n");
+    if (c) *c = 0;
+    snprintf(val, size, "%s", trim(v));
+    return true;
+}
+
+bool config_get(const char *key, char *buf, size_t size) {
+    char path[1100], line[512];
+    config_path(path, sizeof path);
+    FILE *f = fopen(path, "r");
+    bool found = false;
+    while (f && !found && fgets(line, sizeof line, f)) found = line_value(line, key, buf, size);
+    if (f) fclose(f);
+    for (const char *p = DEFAULT_INI; !found && *p;) {  // (not in the file: the default)
+        const char *e = strchr(p, '\n');
+        snprintf(line, sizeof line, "%.*s", (int)(e ? e - p : (long)strlen(p)), p);
+        found = line_value(line, key, buf, size);
+        p = e ? e + 1 : p + strlen(p);
+    }
+    return found;
+}
+
+bool config_same_value(const char *a, const char *b) {
+    char x[128], y[128], *ex, *ey;
+    snprintf(x, sizeof x, "%s", a);
+    snprintf(y, sizeof y, "%s", b);
+    squash(x);
+    squash(y);
+    if (!strcmp(x, y)) return true;
+    double dx = strtod(x, &ex), dy = strtod(y, &ey);  // (numbers: 1.0 == 1)
+    return ex != x && ey != y && !*ex && !*ey && dx == dy;
+}
+
+bool config_restart_pending(const char *key) {
+    char now[64];
+    for (int i = 0; i < g_nsettings; i++) {
+        if (key ? strcmp(g_settings[i].key, key) : g_settings[i].live) continue;
+        if (config_get(g_settings[i].key, now, sizeof now) && !config_same_value(now, g_start_values[i])) return true;
+    }
+    return false;
+}
+
+bool config_set(const char *key, const char *value) {
+    const ConfigSetting *st = NULL;
+    for (int i = 0; i < g_nsettings; i++) if (!strcmp(g_settings[i].key, key)) st = &g_settings[i];
+    if (!st) return false;
+    char path[1100], tmp[1200], line[512], old[256];
+    config_path(path, sizeof path);
+    snprintf(tmp, sizeof tmp, "%s.new", path);
+    FILE *f = fopen(path, "r"), *o = fopen(tmp, "w");
+    if (!o) { if (f) fclose(f); return false; }
+    bool done = false, in_section = false;
+    char section[64];
+    snprintf(section, sizeof section, "[%s]", st->section);
+    while (f && fgets(line, sizeof line, f)) {
+        const char *s = line;
+        while (isspace((unsigned char)*s)) s++;
+        if (!done && in_section && *s == '[') {  // (the key is missing from its section: add it at the section's end)
+            fprintf(o, "%s = %s\n\n", st->key, value);
+            done = true;
+        }
+        if (*s == '[') in_section = !strncasecmp(s, section, strlen(section));
+        if (!done && line_value(line, key, old, sizeof old)) {  // (the key's spelling and the line's comment stay)
+            const char *eq = strchr(line, '='), *cmt = strpbrk(eq, ";#");
+            int cl = cmt ? (int)strcspn(cmt, "\r\n") : 0;
+            fprintf(o, "%.*s= %s%s%.*s\n", (int)(eq - line), line, value, cl ? " " : "", cl, cmt ? cmt : "");
+            done = true;
+            continue;
+        }
+        fputs(line, o);
+    }
+    if (!done) fprintf(o, "%s%s\n%s = %s\n", in_section ? "" : "\n", in_section ? "" : section, st->key, value);
+    if (f) fclose(f);
+    if (fclose(o) != 0 || rename(tmp, path) != 0) { remove(tmp); return false; }
+    LOG("[config] %s = %s%s\n", st->key, value, st->live ? "" : " (at the next start)");
+    if (st->live) {
+        char v[256];
+        snprintf(v, sizeof v, "%s", value);
+        set_key(st->key, v, 0);
+        g_fov_scale = g_config.fov;  // (derived at load)
+    }
+    return true;
 }

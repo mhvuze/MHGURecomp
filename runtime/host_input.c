@@ -283,6 +283,12 @@ static void control_poll(void) {
                 test_until = plat_now_ns() + (uint64_t)atoi(arg3) * 1000000ull;
                 continue;
             }
+            if (!strcmp(cmd, "set")) {  // set <Key> <Value>: as the Settings menu does (config_set, a live one applied)
+                bool live = false;
+                for (int i = 0; i < g_nsettings; i++) if (!SDL_strcasecmp(g_settings[i].key, arg)) live = g_settings[i].live;
+                if (config_set(arg, arg2) && live) ui_setting_changed(arg);
+                continue;
+            }
             if (!strcmp(cmd, "textkey")) {
                 textinput_key(!strcmp(arg, "enter") ? TI_ENTER : !strcmp(arg, "escape") ? TI_CANCEL : TI_NONE);
                 continue;

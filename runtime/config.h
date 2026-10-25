@@ -1,5 +1,7 @@
 // Player settings: mhgurecomp.ini in the game folder (written with the defaults when it is missing).
 #pragma once
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 enum { DISPLAY_WINDOWED, DISPLAY_FULLSCREEN, DISPLAY_BORDERLESS };
@@ -48,3 +50,23 @@ extern float g_ui_anchor_aspect;   // the HUD's width / height, 16:9 .. g_render
 float camera_fovy(float fovy, float aspect);  // a 3D camera's vertical field of view for its aspect (gen.py PATCHES)
 
 void config_load(void);  // before the window and the guest start
+
+// The settings a menu offers (the macOS Settings menu: runtime/platform/darwin_menu.m), in ini order. The rest of
+// the file (multiplayer addresses, monster HP factors...) is edited by hand.
+typedef struct {
+    const char *section, *key, *title;  // its ini section and key, its menu title
+    const char *choices;                // the values offered, as written in the ini, '|' between them
+    const char *labels;                 // their names in the menu, '|' between them (NULL: the values)
+    bool live;                          // takes effect at once (config_set); otherwise at the next start
+} ConfigSetting;
+extern const ConfigSetting g_settings[];
+extern const int g_nsettings;
+void config_path(char *buf, size_t size);  // the settings file
+// A setting's value as the file has it now (its default when the file lacks it), into buf; false: no such key.
+bool config_get(const char *key, char *buf, size_t size);
+bool config_same_value(const char *a, const char *b);  // two values as the parser reads them ("1.0" == "1", case)
+bool config_restart_pending(const char *key);  // its value in the file differs from the one the game started with
+                                                // (NULL: any setting that applies at the next start)
+// Writes the value into the file (in place: comments and other settings stay) and, for a live setting, into
+// g_config. The caller applies a live one where needed (runtime/ui.c ui_setting_changed). false: not written.
+bool config_set(const char *key, const char *value);

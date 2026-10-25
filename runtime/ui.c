@@ -3,6 +3,7 @@
 //   MHGU_HIDDEN=1     no visible window (test runs; controls then come only from MHGU_INPUT)
 // Display mode, size and the 3D resolution come from the settings (runtime/config.c, mhgurecomp.ini).
 #include <stdlib.h>
+#include <string.h>
 
 #include <SDL3/SDL.h>
 
@@ -105,6 +106,23 @@ void ui_init(void) {
     SDL_SetWindowAspectRatio(window, a, a);
     fit_picture();
     if (g_config.display_mode != DISPLAY_WINDOWED) set_fullscreen(true);
+#ifdef __APPLE__
+    plat_menu_init();
+#endif
+}
+
+// A live setting was changed (the Settings menu: config_set has put it in g_config): apply what isn't read as the game
+// goes - the window mode, MSAA, the controller in the background.
+void ui_setting_changed(const char *key) {
+    if (!strcmp(key, "Mode")) {
+        if (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) set_fullscreen(false);  // (Borderless <-> Fullscreen too)
+        if (g_config.display_mode != DISPLAY_WINDOWED) set_fullscreen(true);
+    } else if (!strcmp(key, "MSAA")) {
+        void vk_set_msaa(uint32_t n);  // (runtime/nvn/vulkan/device.c, as F7)
+        vk_set_msaa((uint32_t)g_config.msaa);
+    } else if (!strcmp(key, "BackgroundInput")) {
+        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, g_config.background_input ? "1" : "0");
+    }
 }
 
 // Alt+Enter: windowed <-> the full-screen mode of the settings (Windowed in the settings: borderless).
