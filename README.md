@@ -12,6 +12,8 @@ Status: fully playable, but there may be some bugs. I've played a dozen hunts wi
 ## What it adds over the Switch version
 
 - Graphics settings (resolution, MSAA, FXAA, Supersampling, VSync)
+- Any screen shape from 16:10 to ultrawide (21:9, 32:9 and wider), with the HUD unstretched: centered or spread to
+  the screen's sides
 - Frame rate cap anywhere between 30-240 fps
 - Supports almost every controller under the sun
 - Experimental KB+M controls
@@ -107,10 +109,14 @@ Other keys: Alt+Enter switches between windowed and full screen, F12 takes a scr
 
 Everything is in `mhgurecomp.ini`; each setting is explained in the file itself. In short:
 
-- `[Display]`: `Mode` (Borderless / Fullscreen / Windowed), `Resolution`, `RenderResolution` (the 3D resolution)
+- `[Display]`: `Mode` (Borderless / Fullscreen / Windowed), `Resolution`, `RenderResolution` (the 3D resolution),
+  `AspectRatio` (Auto follows the window: 16:10 and anything wider fill it, narrower gets 16:10 with bars), `FOV`
+  (1.0 = the game's), `UIAnchor` (Center keeps the HUD in the middle 16:9 on an ultrawide screen, Edges spreads it
+  to the sides)
 - `[Anti-aliasing]`: `MSAA` (Off / 2x / 4x / 8x), `FXAA` (On / Off)
 - `[Performance]`: `FPS` (30 to 240), `VSync` (On / Off; above your monitor's refresh rate, turn VSync off)
-- `[Controls]`: `FaceButtons` (Position / Label)
+- `[Controls]`: `FaceButtons` (Position / Label), `BackgroundInput` (On / Off: the controller keeps working while
+  the game's window is in the background, such as with a wiki in front of it; default On)
 - `[Mouse]`: `MouseSensitivity` (1 = default, 0.1 to 10)
 - `[Multiplayer]`: `Port`, `Join` (addresses of hosts outside your LAN), `SyncSmallMonsters`
 - `[Monster HP]`: HP factors for 1 to 4 hunters in Hub quests, and per-quest exceptions (default: all 1, the
@@ -145,6 +151,8 @@ To install a mod, put the mod folder in `mods\`. Remove the folder to uninstall 
   controller in it. While it is open the game gets no controller input. Window positions are kept in
   `forge_imgui.ini`.
 - You do not need any resolution, FPS cap or connection fix mods. These features are included with this port.
+
+If you are newer to the game, I very strongly recommend the [Key Quest Markers](https://gamebanana.com/mods/727960) mod by PurplefinNeptuna. This marks out the Village and Hub quests you need to complete for the next tier directly in the quest menu, which means you no longer need a wiki to play the damn game.
 
 ### Cheats
 

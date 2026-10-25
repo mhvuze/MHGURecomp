@@ -5,16 +5,18 @@
 //   MHGU_WINDOW=WxH      windowed at that size, MHGU_RENDER=WxH  3D resolution, MHGU_MSAA=1|2|4|8, MHGU_FXAA=0|1,
 //                        MHGU_PAD_POSITIONAL=0|1 (test runs; override the file)
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include <SDL3/SDL.h>
 
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, 1};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1};
 uint32_t g_render_size[2] = {1920, 1080};
 float g_render_aspect = 16.0f / 9.0f;
 float g_fov_scale = 1.0f;
@@ -34,26 +36,21 @@ static const char DEFAULT_INI[] =
     "; Borderless always covers the screen, scaling the game's image to it.\n"
     "Resolution = 1920x1080\n"
     "\n"
-    "; The game's 3D resolution: Auto (matches Resolution) or WxH. Lower is faster, higher is sharper;\n"
-    "; the Switch renders 1920x1080 docked. Above Resolution it supersamples (smoothest at exactly double, e.g.\n"
-    "; 3840x2160 for 1920x1080).\n"
+    "; The game's 3D resolution: Auto (as large as fits Resolution, in the picture's shape below) or WxH. Lower is\n"
+    "; faster, higher is sharper; the Switch renders 1920x1080 docked. Above Resolution it supersamples (smoothest at\n"
+    "; exactly double, e.g. 3840x2160 for 1920x1080).\n"
     "RenderResolution = Auto\n"
     "\n"
-    "; Aspect ratio: Auto (matches screen / render resolution, supports 21:9, 32:9, etc.; a screen narrower than 16:9,\n"
-    "; such as 16:10, gets 16:9 with bars above and below), 16:9, 21:9, 32:9 or custom float.\n"
+    "; The picture's shape: Auto (the window's) or a ratio such as 21:9. Wider than 16:9 (ultrawide screens) shows\n"
+    "; more to the sides, 16:10 a little more above and below. Narrower than 16:10 (4:3) gets 16:10 with bars.\n"
     "AspectRatio = Auto\n"
     "\n"
-    "; 3D camera FOV scale multiplier: 1.0 = default (Hor+ scaling for ultrawide).\n"
-    "; Set > 1.0 (e.g. 1.1, 1.2) for wider view, < 1.0 for closer view.\n"
+    "; Field of view: 1.0 is the game's, above 1.0 (1.1, 1.2) shows more, below 1.0 less. 0.5 to 2.\n"
     "FOV = 1.0\n"
     "\n"
-    "; 2D UI anchor mode for ultrawide / super ultrawide displays:\n"
-    "; 1 = 16:9 (centered 16:9 pillarbox HUD area, classic layout)\n"
-    "; 2 = 21:9 (HUD elements spread to 21:9 bounds)\n"
-    "; 3 = 32:9 (HUD elements spread to 32:9 screen bounds)\n"
-    "; If a mode is chosen that is wider than the current display aspect ratio, it automatically\n"
-    "; defaults back to default 16:9 (Mode 1). 2D UI elements always maintain 1:1 square pixel aspect ratio.\n"
-    "UIAnchor = 1\n"
+    "; Where the HUD goes on a picture wider than 16:9: Center (in the middle 16:9, as the game lays it out) or Edges\n"
+    "; (out to the sides of the screen). 21:9 or 32:9 spread it that wide, at most to the sides.\n"
+    "UIAnchor = Center\n"
     "\n"
     "[Anti-aliasing]\n"
     "; MSAA: Off, 2x, 4x or 8x. Smooths the edges of 3D geometry and of some cut-out leaves and fences; each step\n"
@@ -78,6 +75,10 @@ static const char DEFAULT_INI[] =
     ";   one Y, the top one X, whatever is printed on them (on an Xbox controller the in-game icons then don't match).\n"
     "; Label: by the letter printed on the button (an Xbox controller's A is A; the icons match, the layout is awkward).\n"
     "FaceButtons = Position\n"
+    "\n"
+    "; The controller while the game's window is in the background (a wiki in front of it, or on another screen):\n"
+    "; On (it keeps working) or Off. The keyboard and mouse only work while the window has the focus.\n"
+    "BackgroundInput = On\n"
     "\n"
     "[Mouse]\n"
     "; Mouse look: click in the game window to capture the mouse (it then turns the camera, as the right stick), Esc\n"
@@ -170,6 +171,43 @@ static int parse_factors(const char *v, float f[4]) {
     return *v ? 0 : n;
 }
 
+// The vertical field of view (radians) a camera of this aspect gets (tools/gen.py PATCHES: the three callers of the
+// perspective matrix that load a camera's). One made for the screen (its 16:9 aspect replaced with g_render_aspect)
+// gets the FOV factor and, on a picture narrower than 16:9 (16:10), the height that keeps 16:9's width (Vert+): more
+// above and below instead of less to the sides. Other cameras keep their own.
+float camera_fovy(float fovy, float aspect) {
+    if (aspect != g_render_aspect) return fovy;
+    fovy *= g_fov_scale;
+    if (aspect < 16.0f / 9.0f) fovy = 2.0f * atanf(tanf(fovy * 0.5f) * (16.0f / 9.0f) / aspect);
+    return fovy;
+}
+
+// A picture shape: "Auto" (0), "21:9" / "21/9", or a number (0.5 .. 10).
+static bool parse_aspect(const char *v, float *out) {
+    float n, d, a;
+    char sep, *end;
+    if (!strcasecmp(v, "auto")) { *out = 0; return true; }
+    if (sscanf(v, "%f %c %f", &n, &sep, &d) == 3 && (sep == ':' || sep == '/') && n > 0 && d > 0) {
+        a = n / d;
+    } else {
+        a = strtof(v, &end);
+        if (end == v || *end) return false;
+    }
+    if (a < 0.5f || a > 10.0f) return false;
+    *out = a;
+    return true;
+}
+
+// UIAnchor: Center (also 1, 16:9), 21:9 (2), 32:9 (3) or Edges, as Config.ui_anchor's UI_*
+static bool parse_anchor(const char *v, int *out) {
+    if (!strcasecmp(v, "center") || !strcmp(v, "1") || !strcmp(v, "16:9")) *out = UI_CENTER;
+    else if (!strcmp(v, "2") || !strcmp(v, "21:9")) *out = UI_21_9;
+    else if (!strcmp(v, "3") || !strcmp(v, "32:9")) *out = UI_32_9;
+    else if (!strcasecmp(v, "edges")) *out = UI_EDGES;
+    else return false;
+    return true;
+}
+
 static int desktop_w, desktop_h;
 static bool render_auto = true;
 
@@ -192,35 +230,23 @@ static void set_key(const char *key, char *val, int line) {
     } else if (!strcmp(k, "renderresolution")) {
         if (!strcmp(v, "auto")) render_auto = true;
         else if ((ok = parse_size(v, &g_config.render_w, &g_config.render_h))) render_auto = false;
-    } else if (!strcmp(k, "aspectratio") || !strcmp(k, "aspect")) {
-        if (!strcmp(v, "auto") || !strcmp(v, "native") || !strcmp(v, "default")) {
-            g_config.aspect_ratio = 0.0f;
-        } else if (strchr(v, ':') || strchr(v, '/')) {
-            float num = 0, den = 0;
-            char sep = strchr(v, ':') ? ':' : '/';
-            if (sscanf(v, "%f%c%f", &num, &sep, &den) == 3 && den > 0.0f && num > 0.0f) {
-                g_config.aspect_ratio = num / den;
-            } else ok = false;
-        } else {
-            float f = strtof(v, NULL);
-            if (f >= 0.5f && f <= 10.0f) g_config.aspect_ratio = f;
-            else ok = false;
-        }
-    } else if (!strcmp(k, "fov") || !strcmp(k, "fovscale")) {
+    } else if (!strcmp(k, "aspectratio")) {
+        ok = parse_aspect(v, &g_config.aspect_ratio);
+    } else if (!strcmp(k, "fov")) {
         float f = strtof(v, NULL);
-        if (f >= 0.1f && f <= 5.0f) g_config.fov = f;
-        else ok = false;
-    } else if (!strcmp(k, "uianchor") || !strcmp(k, "ui_anchor") || !strcmp(k, "anchor")) {
-        if (!strcmp(v, "1") || !strcmp(v, "16:9") || !strcmp(v, "16/9")) g_config.ui_anchor = 1;
-        else if (!strcmp(v, "2") || !strcmp(v, "21:9") || !strcmp(v, "21/9")) g_config.ui_anchor = 2;
-        else if (!strcmp(v, "3") || !strcmp(v, "32:9") || !strcmp(v, "32/9")) g_config.ui_anchor = 3;
-        else ok = false;
+        if ((ok = f >= 0.5f && f <= 2.0f)) g_config.fov = f;
+    } else if (!strcmp(k, "uianchor")) {
+        ok = parse_anchor(v, &g_config.ui_anchor);
     } else if (!strcmp(k, "msaa")) {
         if (!strcmp(v, "off") || !strcmp(v, "none") || !strcmp(v, "0") || !strcmp(v, "1") || !strcmp(v, "1x"))
             g_config.msaa = 1;
         else if (!strcmp(v, "2x") || !strcmp(v, "2")) g_config.msaa = 2;
         else if (!strcmp(v, "4x") || !strcmp(v, "4")) g_config.msaa = 4;
         else if (!strcmp(v, "8x") || !strcmp(v, "8")) g_config.msaa = 8;
+        else ok = false;
+    } else if (!strcmp(k, "backgroundinput")) {
+        if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.background_input = 1;
+        else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.background_input = 0;
         else ok = false;
     } else if (!strcmp(k, "fxaa")) {
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.fxaa = 1;
@@ -369,86 +395,61 @@ void config_load(void) {
     if (getenv("MHGU_HIDDEN")) g_config.display_mode = DISPLAY_WINDOWED;
     if ((e = getenv("MHGU_MSAA"))) g_config.msaa = atoi(e) >= 8 ? 8 : atoi(e) >= 4 ? 4 : atoi(e) >= 2 ? 2 : 1;
     if ((e = getenv("MHGU_FXAA"))) g_config.fxaa = atoi(e) != 0;
+    if ((e = getenv("MHGU_BACKGROUND_INPUT"))) g_config.background_input = atoi(e) != 0;
     if ((e = getenv("MHGU_PAD_POSITIONAL"))) g_config.face_buttons = atoi(e) ? FACE_POSITION : FACE_LABEL;
     if ((e = getenv("MHGU_LDN_PORT")) && atoi(e) > 0) g_config.ldn_port = atoi(e);
     if ((e = getenv("MHGU_SYNC_ZAKO"))) g_config.sync_small_monsters = atoi(e) != 0;
     if ((e = getenv("MHGU_LDN_JOIN"))) snprintf(g_config.ldn_join, sizeof g_config.ldn_join, "%s", e);
-    if ((e = getenv("MHGU_ASPECT"))) {
-        if (!strcmp(e, "auto")) g_config.aspect_ratio = 0.0f;
-        else if (strchr(e, ':')) { float n = 0, d = 0; if (sscanf(e, "%f:%f", &n, &d) == 2 && d > 0) g_config.aspect_ratio = n / d; }
-        else g_config.aspect_ratio = strtof(e, NULL);
-    }
-    if ((e = getenv("MHGU_FOV"))) {
-        float f = strtof(e, NULL);
-        if (f >= 0.1f && f <= 5.0f) g_config.fov = f;
-    }
+    if ((e = getenv("MHGU_ASPECT"))) parse_aspect(e, &g_config.aspect_ratio);
+    if ((e = getenv("MHGU_FOV")) && strtof(e, NULL) >= 0.5f && strtof(e, NULL) <= 2.0f) g_config.fov = strtof(e, NULL);
+    if ((e = getenv("MHGU_UI_ANCHOR"))) parse_anchor(e, &g_config.ui_anchor);
     e = getenv("MHGU_RENDER");
     if (e && parse_size(e, &w, &h)) render_auto = false, g_config.render_w = w, g_config.render_h = h;
 
-    int target_w = g_config.width;
-    int target_h = g_config.height;
-    if (g_config.display_mode == DISPLAY_BORDERLESS) {
-        if (target_w > desktop_w) target_w = desktop_w;
-        if (target_h > desktop_h) target_h = desktop_h;
+    int tw = g_config.width, th = g_config.height;  // (Borderless shows the image at the desktop size)
+    if (g_config.display_mode == DISPLAY_BORDERLESS) tw = tw < desktop_w ? tw : desktop_w, th = th < desktop_h ? th : desktop_h;
+    // The picture's shape: the window's or AspectRatio's, at least 16:10. The game lays its HUD out for 16:9, which
+    // still fits down to 16:10 (a little flatter, nvn/vulkan/exec.c), so a narrower window (4:3) shows 16:10 with bars.
+    // Wider than 16:9 shows more to the sides, 16:9 to 16:10 more above and below (camera_fovy, gen.py PATCHES).
+    float aspect = g_config.aspect_ratio > 0 ? g_config.aspect_ratio : (float)tw / (float)th;
+    if (aspect < 1.6f - 0.005f) {
+        if (g_config.aspect_ratio > 0)
+            LOG("[config] AspectRatio %.3f is narrower than 16:10, which the HUD needs: using 16:10\n", aspect);
+        aspect = 1.6f;
     }
-
+    if (fabsf(aspect - 16.0f / 9.0f) < 0.01f) aspect = 16.0f / 9.0f;  // (1366x768 and the like)
     if (render_auto) {
-        if (g_config.aspect_ratio > 0.0f) {
-            fit_aspect(target_w, target_h, g_config.aspect_ratio, &w, &h);
-            g_config.render_w = w, g_config.render_h = h;
-        } else {
-            g_config.render_w = target_w & ~1, g_config.render_h = target_h & ~1;
-        }
+        fit_aspect(tw, th, aspect, &w, &h);
     } else {
-        if (g_config.aspect_ratio > 0.0f) {
-            fit_aspect(g_config.render_w, g_config.render_h, g_config.aspect_ratio, &w, &h);
-            g_config.render_w = w, g_config.render_h = h;
-        } else {
-            g_config.render_w = g_config.render_w & ~1, g_config.render_h = g_config.render_h & ~1;
-        }
+        fit_aspect(g_config.render_w, g_config.render_h, aspect, &w, &h);
+        if (w != g_config.render_w || h != g_config.render_h)
+            LOG("[config] RenderResolution %dx%d is not the picture's shape (%.3f): using %dx%d\n", g_config.render_w,
+                g_config.render_h, aspect, w, h);
     }
-    // Auto on a screen narrower than 16:9 (16:10 laptops): the game's 2D UI is laid out on a 16:9 canvas and is only
-    // unstretched for wider screens (exec.c), so the picture stays 16:9 and the presentation fits it with bars.
-    if (g_config.aspect_ratio <= 0.0f && (float)g_config.render_w / (float)g_config.render_h < 16.0f / 9.0f - 0.01f) {
-        fit_aspect(g_config.render_w, g_config.render_h, 16.0f / 9.0f, &w, &h);
-        g_config.render_w = w, g_config.render_h = h;
-    }
-    g_render_size[0] = (uint32_t)g_config.render_w;
-    g_render_size[1] = (uint32_t)g_config.render_h;
+    g_config.render_w = w, g_config.render_h = h;
+    g_render_size[0] = (uint32_t)w;
+    g_render_size[1] = (uint32_t)h;
+    g_render_aspect = aspect;
+    g_fov_scale = g_config.fov;
 
-    if (g_config.aspect_ratio > 0.0f)
-        g_render_aspect = g_config.aspect_ratio;
-    else
-        g_render_aspect = (float)g_config.render_w / (float)g_config.render_h;
-    g_fov_scale = g_config.fov > 0.0f ? g_config.fov : 1.0f;
-
-    if ((e = getenv("MHGU_UI_ANCHOR"))) {
-        int a = atoi(e);
-        if (a >= 1 && a <= 3) g_config.ui_anchor = a;
-    }
-
-    float chosen_aspect = 16.0f / 9.0f;
-    if (g_config.ui_anchor == 2) chosen_aspect = 21.0f / 9.0f;
-    else if (g_config.ui_anchor == 3) chosen_aspect = 32.0f / 9.0f;
-
-    // If an anchor mode is selected that the current aspect ratio doesn't support, default back to 16:9 (Mode 1)
-    if (chosen_aspect > g_render_aspect + 0.05f) {
-        LOG("[config] UIAnchor mode %d (aspect %.3f) is not supported by current aspect ratio (%.3f); defaulting to Mode 1 (16:9)\n",
-            g_config.ui_anchor, chosen_aspect, g_render_aspect);
-        g_config.ui_anchor = 1;
-        chosen_aspect = 16.0f / 9.0f;
-    }
-    g_ui_anchor_aspect = chosen_aspect;
-
+    // The HUD's width: 16:9 (Center), 21:9, 32:9 or the picture's (Edges), at most the picture's; the game's 2D canvas
+    // gets that width (gen.py PATCHES), exec.c places the HUD's parts in it.
+    float ui = g_config.ui_anchor == UI_EDGES  ? aspect
+             : g_config.ui_anchor == UI_32_9 ? 32.0f / 9.0f
+             : g_config.ui_anchor == UI_21_9 ? 21.0f / 9.0f
+                                             : 16.0f / 9.0f;
+    g_ui_anchor_aspect = ui < aspect ? ui : aspect;
     g_ui_size[1] = 720;
-    g_ui_size[0] = (uint32_t)(720.0f * chosen_aspect + 0.5f) & ~1;
+    g_ui_size[0] = (uint32_t)(720.0f * g_ui_anchor_aspect + 0.5f) & ~1u;
     if (g_ui_size[0] < 1280) g_ui_size[0] = 1280;
 
     static const char *const modes[] = {"windowed", "fullscreen", "borderless"};
-    LOG("[config] %s: %s %dx%d, 3D %dx%d (aspect %.3f, FOV x%.2f, UI anchor %d [%.3f], canvas %ux%u), %d fps, vsync %s, MSAA %dx, FXAA %s, face buttons by %s\n", path,
-        modes[g_config.display_mode], g_config.width, g_config.height, g_config.render_w, g_config.render_h, g_render_aspect, g_fov_scale,
-        g_config.ui_anchor, g_ui_anchor_aspect, g_ui_size[0], g_ui_size[1],
-        g_config.fps, g_config.vsync ? "on" : "off", g_config.msaa, g_config.fxaa ? "on" : "off", g_config.face_buttons == FACE_LABEL ? "label" : "position");
+    LOG("[config] %s: %s %dx%d, 3D %dx%d (shape %.3f, FOV x%.2f, HUD %.3f wide), %d fps, vsync %s, MSAA %dx, FXAA %s, "
+        "face buttons by %s, controller %s in the background\n", path, modes[g_config.display_mode], g_config.width,
+        g_config.height, g_config.render_w, g_config.render_h, g_render_aspect, g_fov_scale, g_ui_anchor_aspect,
+        g_config.fps, g_config.vsync ? "on" : "off",
+        g_config.msaa, g_config.fxaa ? "on" : "off", g_config.face_buttons == FACE_LABEL ? "label" : "position",
+        g_config.background_input ? "on" : "off");
     const HpScale *hp = &g_config.hp;
     LOG("[config] monster HP in Hub quests: x%.2f / %.2f / %.2f / %.2f for 1-4 hunters, %d quest(s) set apart\n",
         hp->scale[0], hp->scale[1], hp->scale[2], hp->scale[3], hp->quests);
