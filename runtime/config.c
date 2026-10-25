@@ -39,7 +39,8 @@ static const char DEFAULT_INI[] =
     "; 3840x2160 for 1920x1080).\n"
     "RenderResolution = Auto\n"
     "\n"
-    "; Aspect ratio: Auto (matches screen / render resolution, supports 21:9, 32:9, etc.), 16:9, 21:9, 32:9 or custom float.\n"
+    "; Aspect ratio: Auto (matches screen / render resolution, supports 21:9, 32:9, etc.; a screen narrower than 16:9,\n"
+    "; such as 16:10, gets 16:9 with bars above and below), 16:9, 21:9, 32:9 or custom float.\n"
     "AspectRatio = Auto\n"
     "\n"
     "; 3D camera FOV scale multiplier: 1.0 = default (Hor+ scaling for ultrawide).\n"
@@ -357,7 +358,9 @@ void config_load(void) {
     }
 
     const SDL_DisplayMode *dm = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
-    desktop_w = dm ? dm->w : 1920, desktop_h = dm ? dm->h : 1080;
+    // (in pixels: a mode's size is in points where pixel_density is above 1, as on a Retina Mac)
+    float density = dm && dm->pixel_density > 0.0f ? dm->pixel_density : 1.0f;
+    desktop_w = dm ? (int)(dm->w * density + 0.5f) : 1920, desktop_h = dm ? (int)(dm->h * density + 0.5f) : 1080;
     if (!g_config.width) g_config.width = desktop_w, g_config.height = desktop_h;
 
     const char *e = getenv("MHGU_WINDOW");
@@ -403,6 +406,12 @@ void config_load(void) {
         } else {
             g_config.render_w = g_config.render_w & ~1, g_config.render_h = g_config.render_h & ~1;
         }
+    }
+    // Auto on a screen narrower than 16:9 (16:10 laptops): the game's 2D UI is laid out on a 16:9 canvas and is only
+    // unstretched for wider screens (exec.c), so the picture stays 16:9 and the presentation fits it with bars.
+    if (g_config.aspect_ratio <= 0.0f && (float)g_config.render_w / (float)g_config.render_h < 16.0f / 9.0f - 0.01f) {
+        fit_aspect(g_config.render_w, g_config.render_h, 16.0f / 9.0f, &w, &h);
+        g_config.render_w = w, g_config.render_h = h;
     }
     g_render_size[0] = (uint32_t)g_config.render_w;
     g_render_size[1] = (uint32_t)g_config.render_h;
