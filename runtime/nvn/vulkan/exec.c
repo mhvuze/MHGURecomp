@@ -1611,6 +1611,22 @@ static void compile_program(void *arg) {
 
 static void progcache_store(Prog *p);
 
+// Textures a stage binds against the GPU's per-stage limit (16 under MoltenVK, where a desktop driver has hundreds):
+// a stage over it would fail or draw wrongly, so each is reported once, and prebuild_report gives the game's most.
+static _Atomic int tex_most, tex_over;
+static void tex_limit_check(Prog *p) {
+    uint32_t limit = g_vk.props.limits.maxPerStageDescriptorSamplers;
+    ShaderInfo *st[2] = {p->vi, p->fi};
+    for (int i = 0; i < 2; i++) {
+        if (!st[i] || !st[i]->msl) continue;
+        int n = st[i]->ntex, m = atomic_load(&tex_most);
+        while (n > m && !atomic_compare_exchange_weak(&tex_most, &m, n)) {}
+        if ((uint32_t)n > limit && atomic_fetch_add(&tex_over, 1) < 20)
+            LOG("[RED] %s shader %llx binds %d textures, over the GPU's %u per stage\n", i ? "fragment" : "vertex",
+                (unsigned long long)p->code[i], n, limit);
+    }
+}
+
 static void translate_program(void *arg) {
     Prog *p = arg;
     uint64_t t0 = plat_now_ns();
@@ -1624,6 +1640,7 @@ static void translate_program(void *arg) {
     }
     pthread_mutex_unlock(&translate_lock);
     job_stat(0, t0);
+    tex_limit_check(p);
     if (!p->vi->msl) {
         LOG("[shader] VS translate failed: %s (code %llx)\n", p->vi->error, (unsigned long long)p->code[0]);
         set_state(&p->state, 2, p->t_req);
@@ -1755,6 +1772,7 @@ static void progcache_init(void) {
             p->vkey = r.vkey;
             p->fkey = r.fkey;
             *slot = p;
+            tex_limit_check(p);
             n++;
         }
         fseek(f, good, SEEK_SET);
@@ -1867,6 +1885,7 @@ typedef struct {
     uint8_t cull, front_ccw, prim_restart, depth_bias, depth_clamp;
     uint8_t depth_test, depth_write, depth_op, stencil_test;
     uint8_t sten_ops[2][4];  // per face: fail, pass, depth fail, compare
+    uint8_t alpha_func;      // NVN's alpha test (1..7, 0 none): the fragment program's specialization constant 0
 } PipeKey;
 
 typedef struct Pipe {
@@ -1982,6 +2001,10 @@ static VkResult create_pipeline(const PipeKey *k, VkPipeline *out) {
     VkPipelineShaderStageCreateInfo stages[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = k->prog->vs, .pName = "main"},
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = k->prog->fs, .pName = "main"}};
+    int32_t alpha_func = k->alpha_func;  // (the alpha test: the fragment program's specialization constant 0)
+    VkSpecializationMapEntry alpha_entry = {0, 0, sizeof alpha_func};
+    VkSpecializationInfo alpha_spec = {1, &alpha_entry, sizeof alpha_func, &alpha_func};
+    if (alpha_func) stages[1].pSpecializationInfo = &alpha_spec;
     VkVertexInputAttributeDescription va[32];
     VkVertexInputBindingDescription vb[17];
     VkVertexInputBindingDivisorDescriptionEXT vd[17];
@@ -2184,6 +2207,12 @@ static void prebuild_report(void) {
     if (now - last < 5000000000ull) return;
     last = now;
     int warmed = atomic_load(&stat_warmed), queued = atomic_load(&stat_warm_queued);
+    static bool tex_told;
+    if (!tex_told && variant_n == prebuilt_n && prebuilt_n > 1000) {  // (every program set up is translated by now)
+        tex_told = true;
+        LOG("[shader] textures per stage: at most %d (the GPU allows %u), %d stages over\n", atomic_load(&tex_most),
+            g_vk.props.limits.maxPerStageDescriptorSamplers, atomic_load(&tex_over));
+    }
     if (warmed == last_warmed && warmed >= queued) return;
     last_warmed = warmed;
     LOG("[shader] prebuild: %d programs set up, %d warmed of %d to warm\n", prebuilt_n, warmed, queued);
@@ -2629,7 +2658,8 @@ static void draw(CmdRec *r, bool indexed) {
     vkey.depth_minus_one = nvn_depth_mode() == 0;
     for (int i = 0; i < st.nattrib; i++) vkey.attr_kind[i] = (uint8_t)attr_kind(st.attrib[i] & 0xFF);
     for (int i = 0; i < st.rt.ncolor; i++) if (st.rt.color[i]) fkey.rt_kind[i] = (uint8_t)rt_kind(st.rt.color[i]->format);
-    if (st.color_state[2] >= 1 && st.color_state[2] <= 7) fkey.alpha_func = st.color_state[2];  // (NVN alpha test)
+    // NVN's alpha test: a specialization constant of the fragment program, in the pipeline key (translate.c)
+    uint8_t af = st.color_state[2] >= 1 && st.color_state[2] <= 7 ? (uint8_t)st.color_state[2] : 0;
     Prog *pr = get_program(st.program, &vkey, &fkey);
     if (!pr) { stat_skipped++; return; }
     if (!await_build(&pr->state, pr)) { skip_draw(&stat_skip_prog); return; }
@@ -2647,8 +2677,8 @@ static void draw(CmdRec *r, bool indexed) {
         if (st.rt.color[i] && ((st.channel_mask >> (i * 4)) & 0xF)) snapshots_invalidate(st.rt.color[i]);
     begin_pass();
     VkCommandBuffer cb = vk_cmd();
-    int af = fkey.alpha_func;
     if (pass_samples > 1 && (af == 2 || af == 4 || af == 5 || af == 7)) {  // MSAA: the alpha test as sample coverage
+        fkey.alpha_func = af;  // (a program of its own, the test written in)
         fkey.alpha_coverage = (uint8_t)pass_samples;
         pr = get_program(st.program, &vkey, &fkey);
         if (!pr) { stat_skipped++; return; }
@@ -2662,6 +2692,7 @@ static void draw(CmdRec *r, bool indexed) {
     k.rp = pass_rp;
     k.ncolor = pass_ncolor;
     k.samples = pass_samples;
+    k.alpha_func = pr->fkey.alpha_coverage ? 0 : af;
     for (int i = 0; i < 32; i++) {
         if (!(pr->vi->attr_mask & (1u << i))) continue;
         k.attr_mask |= 1u << i;
@@ -2868,7 +2899,7 @@ static void draw(CmdRec *r, bool indexed) {
                           " fill %d restart %d ccw %d",
                           (void *)st.rt.depth, pass_depth, pass_w, pass_h, k.depth_test, k.depth_write, k.depth_op, k.stencil_test,
                           k.ncolor, pass_color[0], pass_ncolor > 1 ? pass_color[1] : 0, pass_ncolor > 2 ? pass_color[2] : 0, k.samples,
-                          k.a2c, fkey.alpha_func, k.poly_fill, k.prim_restart, k.front_ccw);
+                          k.a2c, k.alpha_func, k.poly_fill, k.prim_restart, k.front_ccw);
             {  // compiler constants (cbuf 1) stored after the fragment code
                 NvnShaderStage *fs = &st.program->stages[1];
                 if (fs->code_addr && guest_range_ok(fs->code_addr + fs->const_offset, 16)) {
