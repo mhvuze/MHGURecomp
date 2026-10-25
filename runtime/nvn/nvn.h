@@ -7,6 +7,8 @@
 // 8-byte stack slot) and which are floats (s registers). The implementations then see the arguments the way the
 // AArch64 ABI would hand them over: integer-class arguments in order as A(i), floating point in order as AF(i).
 #pragma once
+#include <stdatomic.h>
+
 #include "../hle.h"
 #include "tegra.h"
 
@@ -102,6 +104,9 @@ typedef struct NvnProgram {
     uint32_t stage_mask;
     void *backend;
 } NvnProgram;
+#define PROGRAMS_MAX 16384
+extern NvnProgram *g_programs[PROGRAMS_MAX];  // the graphics programs set up so far (objects.c), in order
+extern _Atomic int g_nprograms;
 
 typedef struct NvnWindow {
     uint64_t textures[8];  // guest NVNtexture*

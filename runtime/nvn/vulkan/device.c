@@ -628,9 +628,11 @@ static void exit_handler(void) {
         pthread_mutex_lock(&g_vk_mutex);
         pthread_mutex_unlock(&g_vk_mutex);
     }
+    bool vk_jobs_quiesce(void);  // (exec.c: shader / pipeline workers stop, the jobs running finish)
+    bool quiet = vk_jobs_quiesce();
     if (g_vk.dev) {
         vkDeviceWaitIdle(g_vk.dev);
-        pipeline_cache_save();
+        if (quiet) pipeline_cache_save();  // (not under a pipeline still being created)
     }
     fflush(stdout);
     fflush(stderr);

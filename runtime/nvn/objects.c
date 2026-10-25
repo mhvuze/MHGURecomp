@@ -548,6 +548,11 @@ NVN(nvnProgramSetDebugLabel) { (void)c; }
 NVN(nvnProgramSetSampleShading) { (void)c; }
 NVN(nvnProgramSetSubroutineLinkage) { RET(1); }
 // NVNshaderData[n] = {u64 data (GPU address), const void *control (32-bit pointer, then 4 bytes padding)}
+// Every graphics program the game sets up (all of its shader package, ~6,300, while it boots), for the renderer to
+// prebuild ahead of their first draws (runtime/nvn/vulkan/exec.c prebuild_programs).
+NvnProgram *g_programs[PROGRAMS_MAX];
+_Atomic int g_nprograms;
+
 static void set_shaders(Cpu *c, NvnArgs *na_, int stride) {
     NvnProgram *p = HOST(NvnProgram, A(0));
     int n = (int)A(1);
@@ -576,6 +581,10 @@ static void set_shaders(Cpu *c, NvnArgs *na_, int stride) {
         p->stages[stage].const_offset = *(const uint32_t *)(control + 0x700);
         p->stages[stage].const_size = *(const uint32_t *)(control + 0x6FC);
         p->stage_mask |= 1u << stage;
+    }
+    if ((p->stage_mask & 3) == 3) {
+        int i = atomic_load(&g_nprograms);
+        if (i < PROGRAMS_MAX) { g_programs[i] = p; atomic_store(&g_nprograms, i + 1); }
     }
     RET(1);
 }
