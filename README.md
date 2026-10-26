@@ -292,8 +292,15 @@ Apple Silicon, with Xcode's command line tools and [Homebrew](https://brew.sh). 
 `runtime/platform/darwin.c` when `uname -s` is `Darwin`; rendering goes through MoltenVK (Vulkan on Metal).
 Status: plays at 60 fps on an M1 Pro (hunts, movies, audio, controller with rumble).
 
+Everything is built for macOS 13 and newer (`MACOS_MIN`), so a build runs on other Macs too. Homebrew's libraries
+load only on the macOS they were installed on, so `make macos-deps` builds the ones the game loads from source, once,
+into `third_party/macos-deps` (`tools/macos_deps.sh`): SDL3, the Vulkan loader, shaderc and a small LGPL ffmpeg with
+only the demuxers and decoders the movies need. MoltenVK (macOS 12 and newer) and the Vulkan headers come from
+Homebrew.
+
 ```bash
-brew install sdl3 ffmpeg shaderc vulkan-loader vulkan-headers molten-vk python@3.12
+brew install cmake pkg-config vulkan-headers molten-vk python@3.12
+make macos-deps                  # once: third_party/macos-deps/
 mkdir -p third_party/vk_mem_alloc && curl -fL -o third_party/vk_mem_alloc/vk_mem_alloc.h \
   https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/v3.4.0/include/vk_mem_alloc.h
 python3.12 -m venv tools/venv && tools/venv/bin/pip install -r tools/requirements.txt
@@ -309,7 +316,7 @@ make app GAME=../mhgu/game       # app/MHGURecomp.app
 ```
 
 `app/MHGURecomp.app` is self-contained: the runtime, the game code, your game files (APFS clones: no extra space on
-the same disk), the Homebrew libraries it uses and MoltenVK, signed ad hoc for your Mac. Move it to Applications if
+the same disk), the libraries it loads and MoltenVK, signed ad hoc for your Mac. Move it to Applications if
 you like. Everything it writes goes to `~/Library/Application Support/MHGURecomp`: `mhgurecomp.ini`, `mods/`,
 `cheats/`, `log.txt`, the shader caches and the saves. **Settings…** (⌘,) opens a window with every setting, in tabs;
 the **Settings** menu in the menu bar also changes the common ones (most at once, the rest after "Restart to Apply")
@@ -324,24 +331,18 @@ first touch of each guest page stops with `EXC_BAD_ACCESS`; let the runtime's ha
 
 #### Making a macOS release
 
-A release is an app without game files, zipped like the Windows and Linux ones: `macOS-MHGURecomp.<version>.zip`
-holding `MHGURecomp.app`. Homebrew's libraries load only on the macOS they were installed on, so the release is built
-against libraries made for an older one (`MACOS_MIN`, default 13.0) by `tools/macos_deps.sh`: SDL3, the Vulkan
-loader, shaderc and a small LGPL ffmpeg with only the decoders the movies need. MoltenVK stays Homebrew's (it runs on
-macOS 12 and newer).
+A release is an app of the build without game files, zipped like the Windows and Linux ones:
+`macOS-MHGURecomp.<version>.zip` holding `MHGURecomp.app`.
 
 ```bash
-brew install cmake
-make macos-deps                                    # once: third_party/macos-deps/
 make release VERSION=0.9.11 BONUS=<bonus folder>   # release/macOS-MHGURecomp.0.9.11.zip
 ```
 
-`make release` builds into `build-release/` and `obj-release/`, so `build/` stays as it is. `BONUS` is the folder
+`BONUS` is the folder
 holding the donor save's `system` file (the `bonus` folder of the other releases); the app carries it in
 `Contents/Resources/bonus`. Leave `BONUS` out to make a release without bonus content. `make_app` refuses to finish if
 any binary in the app needs a newer macOS than `MACOS_MIN`, loads a library from outside the app and macOS, or names
-a folder in your home folder. The app
-is signed ad hoc, not notarized.
+a folder in your home folder. The app is signed ad hoc, not notarized.
 
 #### Installing a macOS release
 

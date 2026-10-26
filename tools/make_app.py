@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Make a self-contained macOS app of a build.
 
-    python3 tools/make_app.py <build dir> <game dir> <app path>
+    python3 tools/make_app.py [--libs DIR] <build dir> <game dir> <app path>
     python3 tools/make_app.py --release [--version V] [--min-macos X] [--libs DIR] [--bonus DIR] <build dir> <app path>
 
 The app holds the runtime and the game code library of <build dir>, the game files (<game dir>/exefs and /romfs as APFS
-clones: no extra space on the same disk), the libraries they need from Homebrew (rewritten to load from the app, so a
-later `brew upgrade` can't break it), MoltenVK with its Vulkan driver manifest, and the game's own icon when the
-extraction left one (<game dir>/icon.jpg). It is signed ad hoc for this Mac.
+clones: no extra space on the same disk), the libraries they load from outside macOS (those make macos-deps built in
+--libs, found also through the build's rpath; rewritten to load from the app), Homebrew's MoltenVK with its Vulkan
+driver manifest, and the game's own icon when the extraction left one (<game dir>/icon.jpg). It is signed ad hoc for
+this Mac.
 
 Everything the game writes goes to ~/Library/Application Support/MHGURecomp (runtime/platform/darwin.c): settings,
 caches, mods/, cheats/, log.txt and the saves.
@@ -15,10 +16,9 @@ caches, mods/, cheats/, log.txt and the saves.
 The app contains game code and data made from your own dump: it is for you, never for sharing.
 
 --release makes the app a release is (make release): no game files and no game icon in it (players put their own
-exefs/ and romfs/ in ~/Library/Application Support/MHGURecomp/data, runtime/main.c), the libraries from --libs (built
-for --min-macos by tools/macos_deps.sh) instead of Homebrew's, the donor save of --bonus in Contents/Resources/bonus
-(runtime/services/bonus.c), no debug map or build-machine paths, and a check that every binary in it loads on
---min-macos.
+exefs/ and romfs/ in ~/Library/Application Support/MHGURecomp/data, runtime/main.c), the version and --min-macos in
+Info.plist, the donor save of --bonus in Contents/Resources/bonus (runtime/services/bonus.c), no debug map, and a check
+that every binary in it loads on --min-macos and names no folder of this Mac.
 """
 import argparse
 import json
@@ -51,8 +51,8 @@ def resolve(dep, loader):
     if dep.startswith("@loader_path/"):
         return os.path.realpath(os.path.join(os.path.dirname(loader), dep[len("@loader_path/"):]))
     if dep.startswith("@rpath/"):
-        for base in (*LIB_DIRS, os.path.dirname(loader), os.path.join(os.path.dirname(loader), "..", "lib"),
-                     "/opt/homebrew/lib"):
+        for base in (*LIB_DIRS, *[r for r in rpaths(loader) if r.startswith("/")], os.path.dirname(loader),
+                     os.path.join(os.path.dirname(loader), "..", "lib")):
             p = os.path.join(base, dep[len("@rpath/"):])
             if os.path.exists(p):
                 return os.path.realpath(p)
@@ -98,12 +98,14 @@ def rpaths(path):
     return [lines[i + 2].split()[1] for i, l in enumerate(lines) if l.strip() == "cmd LC_RPATH"]
 
 
-def drop_build_paths(path):
-    """A release binary keeps no path of the build machine: no absolute rpath (Makefile: RELEASE=1), no debug map."""
+def drop_build_paths(path, strip):
+    """No absolute rpath (the Makefile's, to $(DEPS)/lib: the app loads its own copies); strip: no debug map either, so
+    a release keeps no path of the build machine."""
     for r in rpaths(path):
         if not r.startswith("@"):
             run("install_name_tool", "-delete_rpath", r, path)
-    run("strip", "-S", path)  # (debug map only: the symbols stay, for the game code library and crash backtraces)
+    if strip:
+        run("strip", "-S", path)  # (debug map only: the symbols stay, for the game code library and crash backtraces)
 
 
 def version(v):
@@ -194,9 +196,8 @@ def main():
     exe, gamelib = os.path.join(macos, EXE), os.path.join(macos, GAMELIB)
     shutil.copy2(os.path.join(build, EXE), exe)
     shutil.copy2(os.path.join(build, GAMELIB), gamelib)
-    if a.release:
-        for f in (exe, gamelib):
-            drop_build_paths(f)
+    for f in (exe, gamelib):
+        drop_build_paths(f, strip=a.release)
     moltenvk_src = os.path.realpath("/opt/homebrew/opt/molten-vk/lib/libMoltenVK.dylib")
     moltenvk = os.path.join(frameworks, "libMoltenVK.dylib")
     shutil.copy2(moltenvk_src, moltenvk)

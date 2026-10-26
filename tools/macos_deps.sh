@@ -87,4 +87,7 @@ if ! built ffmpeg; then
     done_ ffmpeg
 fi
 
+# what the game doesn't load: the sources and build trees (650 MB; a library built again downloads them again), the
+# tools, static libraries and the loader's framework copy
+rm -rf "$SRC" "$PREFIX/bin" "$PREFIX/loader" "$PREFIX"/lib/*.a "$PREFIX"/lib/libSPIRV-Tools-shared.dylib
 echo "macos_deps: libraries for macOS $MIN in $PREFIX"

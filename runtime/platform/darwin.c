@@ -163,6 +163,11 @@ void plat_init(void) {
         *strrchr(exe, '/') = 0;
         snprintf(icd, sizeof icd, "%s/../Resources/vulkan/icd.d/MoltenVK_icd.json", exe);
         if (access(icd, R_OK) == 0) setenv("VK_DRIVER_FILES", icd, 0);  // (a bundle without one: the system's)
+    } else {
+        // build/: the loader of make macos-deps searches /usr/local/etc and /usr/local/share, not Homebrew's folder
+        // on Apple Silicon: add its MoltenVK to the drivers it finds
+        static const char brew_icd[] = "/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json";
+        if (access(brew_icd, R_OK) == 0) setenv("VK_ADD_DRIVER_FILES", brew_icd, 0);
     }
 }
 
