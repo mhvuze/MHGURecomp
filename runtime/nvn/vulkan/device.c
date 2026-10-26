@@ -553,6 +553,7 @@ static bool shot_frame(uint64_t f) {
 void backend_present(NvnTexture *t) {
     extern void vi_apply_framerate(void);
     vi_apply_framerate();
+    overlay_tick();  // (its frame, when no Forge plugin builds it: the status line. Before the lock: it takes it)
     vk_lock();
     TexBackend *b = vk_tex(t, true);
     b->presented = true;

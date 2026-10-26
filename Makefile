@@ -121,6 +121,17 @@ $(O)/gen/tools/gamelib_entry.o: tools/gamelib_entry.c $(O)/gamelib.id
 $(O)/rt/gamelib.o: $(O)/gamelib.id
 $(O)/rt/gamelib.o: RTFLAGS += -DGAMELIB_ID='"$(GAMELIB_ID)"'
 
+# SHADER_ID / PIPELINE_ID: what the shader caches go with (runtime/nvn/vulkan/exec.c): cache/programs.bin and
+# warmed.bin with the translator, pipelines.bin with the pipeline code too. An update that leaves them alone keeps the
+# caches (they were tied to the executable: every build started them over).
+SHADER_SRCS := $(wildcard runtime/nvn/maxwell/*.c runtime/nvn/maxwell/*.h) runtime/nvn/vulkan/shaders.c runtime/nvn/vulkan/shaders.h
+SHADER_ID   := $(shell cat $(SHADER_SRCS) | sha256sum | cut -c1-16)
+PIPELINE_ID := $(shell cat $(SHADER_SRCS) runtime/nvn/vulkan/exec.c runtime/nvn/vulkan/vk.h | sha256sum | cut -c1-16)
+$(O)/shader.id: FORCE
+	@mkdir -p $(O); [ "$$(cat $@ 2>/dev/null)" = '$(SHADER_ID) $(PIPELINE_ID)' ] || echo '$(SHADER_ID) $(PIPELINE_ID)' > $@
+$(O)/rt/nvn/vulkan/exec.o: $(O)/shader.id
+$(O)/rt/nvn/vulkan/exec.o: RTFLAGS += -DSHADER_ID='"$(SHADER_ID)"' -DPIPELINE_ID='"$(PIPELINE_ID)"'
+
 $(O)/rt/%.o: runtime/%.c $(RT_HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(RTFLAGS) -c $< -o $@

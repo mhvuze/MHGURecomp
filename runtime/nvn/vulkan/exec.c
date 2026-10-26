@@ -18,8 +18,12 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>  // ftruncate (mingw pulls it in through another header; POSIX does not)
+#ifdef __APPLE__
+#include <sys/sysctl.h>  // (kern.osversion: warmed.bin)
+#endif
 
 #include "../../kernel.h"
+#include "../../overlay.h"
 #include "shaders.h"
 #include "vk.h"
 
@@ -1674,8 +1678,9 @@ static void translate_program(void *arg) {
 // ---- program cache: cache/programs.bin keeps every translated program (sources + reflection, keyed by a hash of the
 // guest code the translator reads and the shader keys), and the next run builds them all on the workers at its first
 // draw, as Ryujinx's shader cache does: an area's programs are then ready when it is entered (translation is serial
-// and was most of the wait). The file is tied to this executable (size + time stamp: any rebuild may have changed the
-// translator) and appended to as programs are translated (a killed run keeps them). MHGU_NO_PROGRAM_CACHE=1: off
+// and was most of the wait). The file is tied to the translator (SHADER_ID: a hash of its sources, from the Makefile;
+// an update that leaves it alone keeps the file) and appended to as programs are translated (a killed run keeps them).
+// A build without SHADER_ID ties it to this executable instead (size + time stamp). MHGU_NO_PROGRAM_CACHE=1: off
 // (also off with the translator debug options MHGU_SAVE_GLSL / MHGU_SAVE_MSL / MHGU_NO_DISCARD).
 #define PROG_TAB 16384  // (open addressing: room for every program of the package, ~6,300, and their variants)
 typedef struct {
@@ -1744,10 +1749,14 @@ static void progcache_init(void) {
     if (getenv("MHGU_NO_PROGRAM_CACHE") || getenv("MHGU_SAVE_GLSL") || getenv("MHGU_SAVE_MSL") || getenv("MHGU_NO_DISCARD"))
         return;
     CacheHeader hdr = {"MHGUPRG", sizeof(ProgRec)}, fh;
+#ifdef SHADER_ID
+    hdr.stamp = hash_words(hdr.stamp, SHADER_ID, strlen(SHADER_ID));
+#else
     char exe[1024];
     struct stat es;
     if (!plat_exe_path(exe, sizeof exe) || stat(exe, &es)) return;
     hdr.stamp = hash_words(hdr.stamp, (uint64_t[]){(uint64_t)es.st_size, (uint64_t)es.st_mtime}, 16);
+#endif
     mkdir("cache", 0755);
     uint64_t t0 = plat_now_ns();
     int n = 0;
@@ -1952,13 +1961,21 @@ static void prewarm_pipelines(Prog *p) {
     }
 }
 
+// cache/pipelines.bin goes with the programs' file and the pipeline code too (PIPELINE_ID: exec.c and vk.h as well).
+static uint64_t pipecache_stamp(const CacheHeader *hdr) {
+    uint64_t h = hash_words(hdr->stamp, (uint64_t[]){sizeof(PipeRec)}, 8);
+#ifdef PIPELINE_ID
+    h = hash_words(h, PIPELINE_ID, strlen(PIPELINE_ID));
+#endif
+    return h;
+}
+
 static void pipecache_init(const CacheHeader *hdr) {
     CacheHeader fh;
     int n = 0;
     long good = 0;
     FILE *f = fopen(PIPECACHE_PATH, "r+b");
-    if (f && fread(&fh, sizeof fh, 1, f) == 1 && !memcmp(fh.magic, "MHGUPRG", 8) &&
-        fh.stamp == hash_words(hdr->stamp, (uint64_t[]){sizeof(PipeRec)}, 8)) {
+    if (f && fread(&fh, sizeof fh, 1, f) == 1 && !memcmp(fh.magic, "MHGUPRG", 8) && fh.stamp == pipecache_stamp(hdr)) {
         good = (long)sizeof fh;
         PipeRec r;
         while (fread(&r, sizeof r, 1, f) == 1 && r.magic == PIPEREC_MAGIC && r.k.ncolor <= 8) {
@@ -1980,7 +1997,7 @@ static void pipecache_init(const CacheHeader *hdr) {
         if (f) fclose(f);
         f = fopen(PIPECACHE_PATH, "wb");
         fh = *hdr;
-        fh.stamp = hash_words(hdr->stamp, (uint64_t[]){sizeof(PipeRec)}, 8);
+        fh.stamp = pipecache_stamp(hdr);
         if (f) fwrite(&fh, sizeof fh, 1, f);
     }
     pipecache_f = f;
@@ -2116,8 +2133,18 @@ static bool warmed_has(uint64_t ck, bool add) {  // add: record it (it is warm n
     return had;
 }
 
-static void warmed_init(const CacheHeader *hdr) {
-    CacheHeader fh;
+// cache/warmed.bin says what the driver's own shader cache has (macOS's, for MoltenVK: it keeps an app's compiled
+// Metal libraries across updates of the app, measured): it goes with the translator (the programs' file), the driver
+// and GPU, and on macOS the OS build (a new Metal compiler).
+static void warmed_init(const CacheHeader *phdr) {
+    CacheHeader whdr = *phdr, *hdr = &whdr, fh;
+    VkPhysicalDeviceProperties *pp = &g_vk.props;
+    whdr.stamp = hash_words(whdr.stamp, (uint32_t[]){pp->driverVersion, pp->vendorID, pp->deviceID, 0}, 16);
+#ifdef __APPLE__
+    char os[64] = "";
+    size_t osn = sizeof os;
+    if (sysctlbyname("kern.osversion", os, &osn, NULL, 0) == 0) whdr.stamp = hash_words(whdr.stamp, os, strlen(os));
+#endif
     FILE *f = fopen(WARMED_PATH, "r+b");
     long good = 0;
     int n = 0;
@@ -2222,6 +2249,25 @@ static void prebuild_report(void) {
     if (warmed == last_warmed && warmed >= queued) return;
     last_warmed = warmed;
     LOG("[shader] prebuild: %d programs set up, %d warmed of %d to warm\n", prebuilt_n, warmed, queued);
+}
+
+// (the window) how far the warm-up is while it has work, as the overlay's status line (runtime/overlay.h); gone when
+// everything queued is warm. (The count to warm grows while the game's programs are still being translated.)
+static void prebuild_status(void) {
+    static uint64_t last;
+    static bool shown;
+    uint64_t now = plat_now_ns();
+    if (now - last < 250000000ull) return;
+    last = now;
+    int warmed = atomic_load(&stat_warmed), queued = atomic_load(&stat_warm_queued);
+    if (warmed >= queued) {
+        if (shown) overlay_status(NULL), shown = false;
+        return;
+    }
+    char s[96];
+    snprintf(s, sizeof s, "Preparing shaders: %d%% (%d of %d)", warmed * 100 / queued, warmed, queued);
+    overlay_status(s);
+    shown = true;
 }
 
 // ================================================================== feedback: sampling a texture that is an attachment
@@ -3406,6 +3452,7 @@ void backend_execute(uint64_t handle) {
     vk_lock();
     prebuild_programs();
     prebuild_report();
+    prebuild_status();
     uint64_t t0 = plat_now_ns();
     exec_list(handle, 0);
     stat_exec_ns += plat_now_ns() - t0;
