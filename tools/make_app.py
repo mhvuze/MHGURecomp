@@ -45,6 +45,16 @@ GAMECODE_FILES = {
     "gamelib_entry.c": "tools/gamelib_entry.c",
     **{"include/" + h: "runtime/" + h for h in ("cpu.h", "vfp.h", "neon_rt.h", "gamelib.h")},
 }
+# Contents/Resources/Licenses: a folder per bundled library (from <--libs>/../share/licenses: tools/macos_deps.sh, and
+# Homebrew's MoltenVK), and MHGU Recomp's own
+LICENSED = {
+    "SDL3": "libSDL3",
+    "FFmpeg": "libavformat, libavcodec and libavutil (where their source is and how they were built: FFmpeg/SOURCE.txt)",
+    "Vulkan-Loader": "libvulkan",
+    "shaderc": "libshaderc_shared, with glslang and SPIRV-Tools (and SPIRV-Headers' headers)",
+    "MoltenVK": "libMoltenVK",
+    "MHGURecomp": "MHGU Recomp itself (MIT), and the code it builds on and bundles (THIRD_PARTY_NOTICES)",
+}
 
 
 def run(*cmd, **kw):
@@ -165,6 +175,25 @@ def check_release(app, want):
         sys.exit("make_app: not a release:\n  " + "\n  ".join(bad))
 
 
+def add_licenses(resources):
+    lic = os.path.join(resources, "Licenses")
+    for d in LIB_DIRS:
+        src = os.path.join(d, "..", "share", "licenses")
+        if os.path.isdir(src):
+            shutil.copytree(src, lic, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".complete"))
+    os.makedirs(os.path.join(lic, "MoltenVK"), exist_ok=True)
+    shutil.copy2("/opt/homebrew/opt/molten-vk/LICENSE", os.path.join(lic, "MoltenVK", "LICENSE"))
+    os.makedirs(os.path.join(lic, "MHGURecomp"), exist_ok=True)
+    for f in ("LICENSE", "THIRD_PARTY_NOTICES"):
+        shutil.copy2(os.path.join(REPO, f), os.path.join(lic, "MHGURecomp", f))
+    with open(os.path.join(lic, "README.txt"), "w") as f:
+        f.write("MHGU Recomp bundles these libraries, each under its own license: the files in its folder.\n\n")
+        for name, what in LICENSED.items():
+            f.write(f"{name}/: {what}\n")
+    # the libraries without license files
+    return [n for n in LICENSED if not os.path.isdir(os.path.join(lic, n)) or not os.listdir(os.path.join(lic, n))]
+
+
 def make_icon(jpg, resources):
     """The game's icon (a JPEG from its control data) as AppIcon.icns."""
     iconset = os.path.join(resources, "AppIcon.iconset")
@@ -256,6 +285,10 @@ def main():
         os.makedirs(os.path.join(resources, "bonus"))
         shutil.copy2(bonus, os.path.join(resources, "bonus", "system"))
 
+    missing = add_licenses(resources)
+    if missing and a.release:
+        sys.exit(f"make_app: no license files for {', '.join(missing)}: make macos-deps keeps them")
+
     # icon (the game's own: not in a release) and Info.plist
     icon = game and os.path.join(game, "icon.jpg")
     if icon and os.path.isfile(icon):
@@ -273,6 +306,9 @@ def main():
         "LSApplicationCategoryType": "public.app-category.games",  # (Game Mode in full screen)
         "NSHighResolutionCapable": True,
         "GCSupportsControllerUserInteraction": True,
+        # (Local Play finds other players' hunts by broadcasting on the local network: runtime/net/ldn.c)
+        "NSLocalNetworkUsageDescription": "MHGU Recomp finds and joins other players' hunts on your local network "
+                                          "(Local Play multiplayer).",
     }
     if os.path.isfile(os.path.join(resources, "AppIcon.icns")):
         plist["CFBundleIconFile"] = "AppIcon"

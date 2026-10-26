@@ -344,8 +344,9 @@ make release VERSION=0.9.11 BONUS=<bonus folder>   # release/macOS-MHGURecomp.0.
 
 `BONUS` is the folder
 holding the donor save's `system` file (the `bonus` folder of the other releases); the app carries it in
-`Contents/Resources/bonus`. Leave `BONUS` out to make a release without bonus content. `make_app` refuses to finish if
-the app holds game code, if any binary in it needs a newer macOS than `MACOS_MIN` or loads a library from outside the
+`Contents/Resources/bonus`. Leave `BONUS` out to make a release without bonus content. The app carries the license
+of every library in it in `Contents/Resources/Licenses` (with FFmpeg's source and configure line, as the LGPL asks);
+`make macos-deps` keeps them. `make_app` refuses to finish if one is missing, if the app holds game code, if any binary in it needs a newer macOS than `MACOS_MIN` or loads a library from outside the
 app and macOS, or if it names a folder in your home folder. The app is signed ad hoc, not notarized.
 
 #### Installing a macOS release
@@ -360,6 +361,8 @@ app and macOS, or if it names a folder in your home folder. The app is signed ad
 4. The first start builds the game's code from your game files, once (about 2½ minutes on an M1 Pro; a window shows
    how far). It needs Apple's free Command Line Developer Tools: if they aren't installed, the app offers Apple's
    installer and continues when they are in place. After an update of the app it builds the code again.
+5. For Local Play multiplayer, allow MHGU Recomp on the local network when macOS asks (or later in **System Settings
+   → Privacy & Security → Local Network**).
 
 Everything else is in `~/Library/Application Support/MHGURecomp` too: `mhgurecomp.ini`, `mods/`, `cheats/`,
 `log.txt`, the game code (`gamecode/`, with the build's `build-log.txt`), the shader caches and the saves (`save/save_0`, as on Windows). Updating means replacing the app; your
