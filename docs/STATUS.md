@@ -207,9 +207,18 @@ User words (fixed 2026-10-24): the game hands the keyboard the character's earli
 released-user-word-info callback before Appear, giving up after 0x38e frames (~15 s: a dimmed screen, no box, and
 Edit Name dead until a restart). The callback was never called, so item set names (and any entry with user words)
 failed for characters with entries typed on a Switch; characters made in the port have none and went straight to
-Appear. Now Calc calls it right after Set/UnsetUserWordInfo. Red herrings on the way: the same dialog loads
+Appear. Now Calc calls it right after SetUserWordInfo. Red herrings on the way: the same dialog loads
 nativeNX/arc/swkbd_eu.arc (not in the game's RomFS on a Switch either: "path not found", harmless), and the bug
 looked Linux-only (it is per character: the Linux tester and the test save had Switch-made characters).
+
+Hidden entry lock-up (fixed 2026-10-26): the 10-24 fix also called the released callback after UnsetUserWordInfo,
+which the game's keyboard manager calls after every entry (state 9). The callback (f_a63d00) sets state 6, "words
+back: show the keyboard", so every entry reopened 4 frames after it closed, with nothing on screen: the keys typed
+into it instead of moving the menu (character creation right after the name), the manager stayed busy, and Escape
+only closed it for it to reopen (the players' logs: "inline keyboard shown" again right after each "entered" /
+"cancelled"). Unset releases nothing now (the words went back right after Set). Manager states (+0x2ec8 of the
+keyboard object, f_a62570): 2/4 open (4: Set the user words -> 5 waits for the callback), 6 show (f_a62d88: input
+text, cursor, Appear) -> 7 -> 8 shown until Calc returns 1 -> 9 (Unset) -> 3 ready; 10-12 finalize and re-initialize.
 
 ## Monster HP by the number of hunters (2026-10-21)
 
@@ -381,7 +390,11 @@ Known gaps that remain:
    (dialogue, item bar, Hunter Arts prompts) or the middle (banners), one anchor per layer so a window drawn in
    pieces stays together. Narrower than 16:10 (4:3) gets 16:10 with bars. Tested 1280x720, 1280x800, 1024x768
    (bars), 1680x720 Center, 1792x504 / 1680x840 Edges: hunt HUD, pause menu, help box, equipment windows,
-   nameplates. Left: the HUD's layout elsewhere (title, town, quest board, item box, cutscenes) unverified; at Edges
+   nameplates. 16:10 fixes by Oddity-git (PR 21, 2026-10-26; tested on a Steam Deck size, Linux): target cam icons
+   top, the loading screen as one picture (layer 110 strips at y 168 / 433 / 570), layer 98 with its 97 menu, the
+   Request Log / quest card (layer 100 beside a 97 menu) top, the Quest Complete border and results rule bottom,
+   the cutscene's top bar top, and the item bar drawn without the game's scissor (that draw only; the next draw and
+   clears get it back). Left: the HUD's layout elsewhere (title, town, quest board, item box) unverified; at Edges
    the Hunter Arts prompt goes right with its layer; whether an off-screen 3D view (equipment box preview, guild
    card) uses one of the three cameras (they are left alone unless 16:9).
 10. Keyboard remapping: an ini [Keyboard] section, one line per Switch button (`A = Mouse2`, `B = Space`; SDL key
