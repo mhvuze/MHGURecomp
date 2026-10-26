@@ -72,6 +72,7 @@ static void window_open(NSString *info) {
         [v addSubview:label];
         g_bar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(20, 62, 440, 20)];
         g_bar.style = NSProgressIndicatorStyleBar;
+        g_bar.indeterminate = NO;  // (a new one is indeterminate: it shows no value, and moves only when animated)
         g_bar.minValue = 0, g_bar.maxValue = 1;
         [v addSubview:g_bar];
         g_status = [NSTextField labelWithString:@""];
@@ -163,7 +164,9 @@ static bool build(NSString *python, NSString *builder, NSString *game, NSString 
                 NSArray<NSString *> *w = [line componentsSeparatedByString:@" "];
                 if (w.count >= 3 && [w[0] isEqualToString:@"progress"]) {
                     g_bar.doubleValue = w[1].doubleValue;
-                    g_status.stringValue = [[w subarrayWithRange:NSMakeRange(2, w.count - 2)] componentsJoinedByString:@" "];
+                    g_status.stringValue = [NSString stringWithFormat:@"%@ (%d%%)",
+                        [[w subarrayWithRange:NSMakeRange(2, w.count - 2)] componentsJoinedByString:@" "],
+                        (int)(w[1].doubleValue * 100)];
                 }
             }
         });

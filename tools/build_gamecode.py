@@ -91,7 +91,8 @@ def compile_all(work, flags, gamelib_id, cc):
         futures = [pool.submit(one, s) for s in sources]
         for n, f in enumerate(concurrent.futures.as_completed(futures), 1):
             objs.append(f.result())
-            say(GEN_SHARE + (LINK_AT - GEN_SHARE) * n / len(sources), "Compiling the game's code")
+            say(GEN_SHARE + (LINK_AT - GEN_SHARE) * n / len(sources),
+                f"Compiling the game's code: {n} of {len(sources)} files")
     return objs
 
 
