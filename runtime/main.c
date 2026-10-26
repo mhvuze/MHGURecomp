@@ -139,6 +139,10 @@ int main(int argc, char **argv) {
             plat_error_box(msg);
             return 1;
         }
+#ifdef __APPLE__
+        // a release app carries no game code: it builds it from these files on the player's Mac, once
+        if (plat_in_app_bundle() && !plat_gamecode_ready(data)) return 1;
+#endif
     }
     { void fnprof_init(void); fnprof_init(); }
     crash_handler_install();

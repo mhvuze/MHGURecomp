@@ -331,8 +331,12 @@ first touch of each guest page stops with `EXC_BAD_ACCESS`; let the runtime's ha
 
 #### Making a macOS release
 
-A release is an app of the build without game files, zipped like the Windows and Linux ones:
-`macOS-MHGURecomp.<version>.zip` holding `MHGURecomp.app`.
+A release is the runtime as an app, with no game code and no game files in it, zipped like the Windows and Linux
+ones: `macOS-MHGURecomp.<version>.zip` holding `MHGURecomp.app` (about 8 MB). The game code is built on each
+player's Mac from their own game files the first time the app starts, the same steps as `make gen` and `make`: the app
+carries the code generator, the runtime headers the code includes and `tools/build_gamecode.py`, which runs them with
+macOS's own `python3` and `clang` (Apple's Command Line Developer Tools) into
+`~/Library/Application Support/MHGURecomp/gamecode/`. Making a release needs no game files or generated code.
 
 ```bash
 make release VERSION=0.9.11 BONUS=<bonus folder>   # release/macOS-MHGURecomp.0.9.11.zip
@@ -341,8 +345,8 @@ make release VERSION=0.9.11 BONUS=<bonus folder>   # release/macOS-MHGURecomp.0.
 `BONUS` is the folder
 holding the donor save's `system` file (the `bonus` folder of the other releases); the app carries it in
 `Contents/Resources/bonus`. Leave `BONUS` out to make a release without bonus content. `make_app` refuses to finish if
-any binary in the app needs a newer macOS than `MACOS_MIN`, loads a library from outside the app and macOS, or names
-a folder in your home folder. The app is signed ad hoc, not notarized.
+the app holds game code, if any binary in it needs a newer macOS than `MACOS_MIN` or loads a library from outside the
+app and macOS, or if it names a folder in your home folder. The app is signed ad hoc, not notarized.
 
 #### Installing a macOS release
 
@@ -353,9 +357,12 @@ a folder in your home folder. The app is signed ad hoc, not notarized.
    and opens `~/Library/Application Support/MHGURecomp/data`.
 3. Put your game's `exefs` and `romfs` folders in that `data` folder (laid out as in [Installation](#installation))
    and start the app again.
+4. The first start builds the game's code from your game files, once (about 2½ minutes on an M1 Pro; a window shows
+   how far). It needs Apple's free Command Line Developer Tools: if they aren't installed, the app offers Apple's
+   installer and continues when they are in place. After an update of the app it builds the code again.
 
 Everything else is in `~/Library/Application Support/MHGURecomp` too: `mhgurecomp.ini`, `mods/`, `cheats/`,
-`log.txt`, the shader caches and the saves (`save/save_0`, as on Windows). Updating means replacing the app; your
+`log.txt`, the game code (`gamecode/`, with the build's `build-log.txt`), the shader caches and the saves (`save/save_0`, as on Windows). Updating means replacing the app; your
 files stay where they are. Needs a Mac with Apple Silicon; the release is built for macOS 13 and newer.
 
 ## Repository layout

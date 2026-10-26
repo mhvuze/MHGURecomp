@@ -65,7 +65,8 @@ GENFLAGS += -fPIC $(MINFLAG)
 # (the rpath: build/mhgurecomp runs from there; make_app replaces it with the app's Frameworks folder)
 LDFLAGS  := -L$(DEPS)/lib -Wl,-rpath,$(abspath $(DEPS)/lib) $(MINFLAG) -rdynamic -lSDL3 -lavformat -lavcodec -lavutil \
             -lvulkan -lshaderc_shared -lpthread -lm -framework Cocoa
-RT_OBJC  := runtime/platform/darwin_menu.m runtime/platform/darwin_settings.m  # (the Settings menu and window)
+# (the Settings menu and window; building the game code on a player's Mac)
+RT_OBJC  := runtime/platform/darwin_menu.m runtime/platform/darwin_settings.m runtime/platform/darwin_gamecode.m
 GAMELIB  := $(B)/mhgugame.dylib
 # (a Mach-O bundle: the game code's imports of runtime functions resolve against the executable at link time)
 GAMELIB_LDFLAGS := -bundle -bundle_loader $(EXE) $(MINFLAG)
@@ -194,17 +195,18 @@ macos-deps:
 
 # macOS release (the zip players download, as upstream's Windows-/ArchLinux-MHGURecomp.<version>.zip):
 #   make release VERSION=0.9.11 [BONUS=<folder with the donor save's system file>]
-# makes release/MHGURecomp.app of the build with no game files in it (players put theirs in
-# ~/Library/Application Support/MHGURecomp/data), zipped as release/macOS-MHGURecomp.$(VERSION).zip.
+# makes release/MHGURecomp.app of the runtime with no game code or game files in it, zipped as
+# release/macOS-MHGURecomp.$(VERSION).zip. Players put their game files in ~/Library/Application Support/MHGURecomp/data
+# and the app builds the game code from them on their Mac (tools/build_gamecode.py, with GENFLAGS and GAMELIB_ID).
+# Needs no game files or generated code here.
 VERSION ?= $(shell git describe --tags --always 2>/dev/null)
 REL_APP := release/MHGURecomp.app
 REL_ZIP := release/macOS-MHGURecomp.$(VERSION).zip
-release: all
+release: $(EXE)
 	@for l in sdl3 vulkan-loader shaderc ffmpeg; do [ "$$(cat $(DEPS)/.$$l 2>/dev/null)" = "$(MACOS_MIN)" ] || \
 	    { echo "release: $$l for macOS $(MACOS_MIN) is not in $(DEPS): make macos-deps first"; exit 1; }; done
-	@[ -n "$(GEN_SRC)" ] || { echo "release: no generated code in $(GEN): make gen GAME=... first"; exit 1; }
 	python3 tools/make_app.py --release --version $(VERSION) --min-macos $(MACOS_MIN) --libs $(DEPS)/lib \
-	    $(if $(BONUS),--bonus $(BONUS)) $(B) $(REL_APP)
+	    --gen-flags '$(GENFLAGS)' --gamelib-id $(GAMELIB_ID) $(if $(BONUS),--bonus $(BONUS)) $(B) $(REL_APP)
 	rm -f $(REL_ZIP) && ditto -c -k --keepParent $(REL_APP) $(REL_ZIP)
 	@echo "release: $(REL_ZIP)"
 

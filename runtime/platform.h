@@ -45,6 +45,10 @@ bool plat_exe_path(char *buf, size_t size);
 void plat_standalone(void);
 #ifdef __APPLE__
 bool plat_in_app_bundle(void);  // running from a macOS .app (runtime/platform/darwin.c)
+// The game code library for an app: its own (beside the executable), or the one built from the game files in
+// game_dir on this Mac, building it first when there is none for this runtime (runtime/platform/darwin_gamecode.m).
+// false: not there (the player cancelled, or the build failed: they were told).
+bool plat_gamecode_ready(const char *game_dir);
 void plat_menu_init(void);      // the Settings menu in the menu bar (runtime/platform/darwin_menu.m)
 #endif
 // The player's own folder for this game, created if missing (save data lives there, away from the game folder so a

@@ -40,6 +40,7 @@ extern "C" {
 // Loads the game code library (next to the executable, or MHGU_GAME_LIB). false: why says what's wrong.
 bool gamelib_load(char *why, size_t why_size);
 const GameLibTables *gamelib_tables(void);
+const char *gamelib_id(void);  // the id a game code library must have for this runtime
 #ifdef __cplusplus
 }
 #endif

@@ -2,7 +2,8 @@
 """Make a self-contained macOS app of a build.
 
     python3 tools/make_app.py [--libs DIR] <build dir> <game dir> <app path>
-    python3 tools/make_app.py --release [--version V] [--min-macos X] [--libs DIR] [--bonus DIR] <build dir> <app path>
+    python3 tools/make_app.py --release --gen-flags F --gamelib-id ID [--version V] [--min-macos X] [--libs DIR]
+                              [--bonus DIR] <build dir> <app path>
 
 The app holds the runtime and the game code library of <build dir>, the game files (<game dir>/exefs and /romfs as APFS
 clones: no extra space on the same disk), the libraries they load from outside macOS (those make macos-deps built in
@@ -15,10 +16,13 @@ caches, mods/, cheats/, log.txt and the saves.
 
 The app contains game code and data made from your own dump: it is for you, never for sharing.
 
---release makes the app a release is (make release): no game files and no game icon in it (players put their own
-exefs/ and romfs/ in ~/Library/Application Support/MHGURecomp/data, runtime/main.c), the version and --min-macos in
-Info.plist, the donor save of --bonus in Contents/Resources/bonus (runtime/services/bonus.c), no debug map, and a check
-that every binary in it loads on --min-macos and names no folder of this Mac.
+--release makes the app a release is (make release): no game code, game files or game icon in it. Players put their
+own exefs/ and romfs/ in ~/Library/Application Support/MHGURecomp/data (runtime/main.c), and the app builds the game
+code from them on their Mac at its first start (runtime/platform/darwin_gamecode.m), with what it carries in
+Contents/Resources/gamecode: tools/build_gamecode.py, the code generator, the runtime headers the code includes and
+build.json (--gen-flags: the Makefile's GENFLAGS; --gamelib-id: the id the runtime was built with). Also: the version
+and --min-macos in Info.plist, the donor save of --bonus in Contents/Resources/bonus (runtime/services/bonus.c), no debug map, and a check
+that every binary in it loads on --min-macos and names no folder of this Mac, and that it holds no game code.
 """
 import argparse
 import json
@@ -32,6 +36,15 @@ SYSTEM_PREFIXES = ("/usr/lib/", "/System/")  # (what macOS has: everything else 
 LIB_DIRS = []  # where @rpath references are looked up first (--libs)
 EXE = "mhgurecomp"
 GAMELIB = "mhgugame.dylib"
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# what builds the game code on a player's Mac (tools/build_gamecode.py): {in Resources/gamecode: in the repository}
+GAMECODE_FILES = {
+    "build_gamecode.py": "tools/build_gamecode.py",
+    "gen.py": "tools/gen.py", "lifter.py": "tools/lifter.py", "neon.py": "tools/neon.py", "nso.py": "tools/nso.py",
+    "hle_symbols.txt": "runtime/hle/hle_symbols.txt",
+    "gamelib_entry.c": "tools/gamelib_entry.c",
+    **{"include/" + h: "runtime/" + h for h in ("cpu.h", "vfp.h", "neon_rt.h", "gamelib.h")},
+}
 
 
 def run(*cmd, **kw):
@@ -132,6 +145,8 @@ def check_release(app, want):
     for root, _, files in os.walk(os.path.join(app, "Contents")):
         for name in files:
             f = os.path.join(root, name)
+            if name.startswith("mhgugame") or (root.endswith(("/main", "/sdk")) and name.endswith(".c")):
+                bad.append(f"{name}: game code")
             if os.path.islink(f) or not run("file", "-b", f).startswith("Mach-O"):
                 continue
             v = min_macos(f)
@@ -170,14 +185,16 @@ def main():
     ap.add_argument("--min-macos", default="13.0")
     ap.add_argument("--libs", action="append", default=[])
     ap.add_argument("--bonus")
+    ap.add_argument("--gen-flags")
+    ap.add_argument("--gamelib-id")
     ap.add_argument("paths", nargs="+")
     a = ap.parse_args()
-    if len(a.paths) != (2 if a.release else 3):
+    if len(a.paths) != (2 if a.release else 3) or (a.release and not (a.gen_flags and a.gamelib_id)):
         sys.exit(__doc__)
     build, app = os.path.abspath(a.paths[0]), os.path.abspath(a.paths[-1])
     game = None if a.release else os.path.abspath(a.paths[1])
     LIB_DIRS[:] = [os.path.abspath(d) for d in a.libs]
-    for f in (os.path.join(build, EXE), os.path.join(build, GAMELIB)):
+    for f in (os.path.join(build, EXE),) + (() if a.release else (os.path.join(build, GAMELIB),)):
         if not os.path.isfile(f):
             sys.exit(f"make_app: {f} is missing: build first (make GAME=...)")
     if game and (not os.path.isfile(os.path.join(game, "exefs", "main")) or not os.path.isdir(os.path.join(game, "romfs"))):
@@ -192,19 +209,27 @@ def main():
     for d in (macos, frameworks, resources):
         os.makedirs(d)
 
-    # code
-    exe, gamelib = os.path.join(macos, EXE), os.path.join(macos, GAMELIB)
-    shutil.copy2(os.path.join(build, EXE), exe)
-    shutil.copy2(os.path.join(build, GAMELIB), gamelib)
-    for f in (exe, gamelib):
-        drop_build_paths(f, strip=a.release)
+    # code: the runtime, and the game code library (a release: what builds it on the player's Mac instead)
+    exe = os.path.join(macos, EXE)
+    roots = {exe: os.path.join(build, EXE)}
+    if a.release:
+        gamecode = os.path.join(resources, "gamecode")
+        for dst, src in GAMECODE_FILES.items():
+            os.makedirs(os.path.dirname(os.path.join(gamecode, dst)), exist_ok=True)
+            shutil.copy2(os.path.join(REPO, src), os.path.join(gamecode, dst))
+        with open(os.path.join(gamecode, "build.json"), "w") as f:
+            json.dump({"genflags": a.gen_flags.strip(), "id": a.gamelib_id, "min_macos": a.min_macos}, f, indent=2)
+    else:
+        roots[os.path.join(macos, GAMELIB)] = os.path.join(build, GAMELIB)
+    for dst, src in roots.items():
+        shutil.copy2(src, dst)
+        drop_build_paths(dst, strip=a.release)
     moltenvk_src = os.path.realpath("/opt/homebrew/opt/molten-vk/lib/libMoltenVK.dylib")
     moltenvk = os.path.join(frameworks, "libMoltenVK.dylib")
     shutil.copy2(moltenvk_src, moltenvk)
     os.chmod(moltenvk, 0o755)
     run("install_name_tool", "-id", "@rpath/libMoltenVK.dylib", moltenvk)
-    libs = bundle_libraries({exe: os.path.join(build, EXE), gamelib: os.path.join(build, GAMELIB), moltenvk: moltenvk_src},
-                            frameworks)
+    libs = bundle_libraries({**roots, moltenvk: moltenvk_src}, frameworks)
     add_rpath(exe, "@executable_path/../Frameworks")
     for name in os.listdir(frameworks):
         add_rpath(os.path.join(frameworks, name), "@loader_path")
@@ -257,7 +282,9 @@ def main():
     # ad-hoc signature: the libraries first (install_name_tool invalidated theirs), then the app
     for name in sorted(os.listdir(frameworks)):
         run("codesign", "--force", "-s", "-", os.path.join(frameworks, name))
-    run("codesign", "--force", "-s", "-", gamelib)
+    for f in roots:
+        if f != exe:  # (the game code library; the executable is signed with the app)
+            run("codesign", "--force", "-s", "-", f)
     run("codesign", "--force", "-s", "-", app)
     if a.release:
         check_release(app, a.min_macos)
