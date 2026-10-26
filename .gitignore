@@ -27,3 +27,7 @@ __pycache__/
 *.7z
 /run2/
 /run3/
+/build-release/
+/obj-release/
+/release/
+/third_party/macos-deps/

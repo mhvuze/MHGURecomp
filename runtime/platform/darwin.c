@@ -182,8 +182,9 @@ bool plat_exe_path(char *buf, size_t size) {
 static bool g_own_log;
 
 // Inside an app bundle (<name>.app/Contents/MacOS/<exe>, tools/make_app.py)? The game files are in the bundle
-// (Contents/MacOS/data -> ../Resources/data), and everything the game writes goes to the player's folder: an app's
-// bundle is sealed by its signature, and a rebuilt app must not take the player's mods and settings along.
+// (Contents/MacOS/data -> ../Resources/data), or for a release app in the player's folder (its data/, runtime/main.c),
+// and everything the game writes goes to the player's folder: an app's bundle is sealed by its signature, and a
+// rebuilt app must not take the player's mods and settings along.
 bool plat_in_app_bundle(void) {
     char exe[PATH_MAX];
     return plat_exe_path(exe, sizeof exe) && strstr(exe, ".app/Contents/MacOS/") != NULL;

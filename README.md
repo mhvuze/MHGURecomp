@@ -311,9 +311,9 @@ make app GAME=../mhgu/game       # app/MHGURecomp.app
 `app/MHGURecomp.app` is self-contained: the runtime, the game code, your game files (APFS clones: no extra space on
 the same disk), the Homebrew libraries it uses and MoltenVK, signed ad hoc for your Mac. Move it to Applications if
 you like. Everything it writes goes to `~/Library/Application Support/MHGURecomp`: `mhgurecomp.ini`, `mods/`,
-`cheats/`, `log.txt`, the shader caches and the saves. The **Settings** menu in the menu bar changes the common settings
-(most at once, the rest after "Restart to Apply"), opens the settings file for the others, and opens those folders
-(⌘, for the settings folder). Its first start warms the game's shaders in the background
+`cheats/`, `log.txt`, the shader caches and the saves. **Settings…** (⌘,) opens a window with every setting, in tabs;
+the **Settings** menu in the menu bar also changes the common ones (most at once, the rest after "Restart to Apply")
+and opens those folders. Its first start warms the game's shaders in the background
 (about 6 minutes on an M1 Pro; the log says how far). **The app contains game code and data made from your dump:
 never share it.**
 
@@ -321,6 +321,41 @@ never share it.**
 Saves go to `~/Library/Application Support/MHGURecomp/save`, same layout as on Windows and Linux. Under lldb, the
 first touch of each guest page stops with `EXC_BAD_ACCESS`; let the runtime's handler take it with
 `process handle SIGSEGV SIGBUS -n false -p true -s false`.
+
+#### Making a macOS release
+
+A release is an app without game files, zipped like the Windows and Linux ones: `macOS-MHGURecomp.<version>.zip`
+holding `MHGURecomp.app`. Homebrew's libraries load only on the macOS they were installed on, so the release is built
+against libraries made for an older one (`MACOS_MIN`, default 13.0) by `tools/macos_deps.sh`: SDL3, the Vulkan
+loader, shaderc and a small LGPL ffmpeg with only the decoders the movies need. MoltenVK stays Homebrew's (it runs on
+macOS 12 and newer).
+
+```bash
+brew install cmake
+make macos-deps                                    # once: third_party/macos-deps/
+make release VERSION=0.9.11 BONUS=<bonus folder>   # release/macOS-MHGURecomp.0.9.11.zip
+```
+
+`make release` builds into `build-release/` and `obj-release/`, so `build/` stays as it is. `BONUS` is the folder
+holding the donor save's `system` file (the `bonus` folder of the other releases); the app carries it in
+`Contents/Resources/bonus`. Leave `BONUS` out to make a release without bonus content. `make_app` refuses to finish if
+any binary in the app needs a newer macOS than `MACOS_MIN`, loads a library from outside the app and macOS, or names
+a folder in your home folder. The app
+is signed ad hoc, not notarized.
+
+#### Installing a macOS release
+
+1. Extract the zip and move `MHGURecomp.app` to Applications.
+2. Start it. The first time, macOS refuses to open an app from the internet that isn't notarized: open **System
+   Settings → Privacy & Security**, click **Open Anyway** next to MHGU Recomp, and confirm. (Or, in Terminal:
+   `xattr -dr com.apple.quarantine /Applications/MHGURecomp.app`.) Once it starts, it says the game files are missing
+   and opens `~/Library/Application Support/MHGURecomp/data`.
+3. Put your game's `exefs` and `romfs` folders in that `data` folder (laid out as in [Installation](#installation))
+   and start the app again.
+
+Everything else is in `~/Library/Application Support/MHGURecomp` too: `mhgurecomp.ini`, `mods/`, `cheats/`,
+`log.txt`, the shader caches and the saves (`save/save_0`, as on Windows). Updating means replacing the app; your
+files stay where they are. Needs a Mac with Apple Silicon; the release is built for macOS 13 and newer.
 
 ## Repository layout
 

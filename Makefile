@@ -49,15 +49,28 @@ GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(O)/mhgurecomp.dll.a
 else ifeq ($(PLATFORM),darwin)
 # Homebrew: SDL3 ffmpeg shaderc vulkan-loader vulkan-headers molten-vk (README.md); VMA in third_party/vk_mem_alloc
 BREW     ?= $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
+# RELEASE=1 (make release): built for macOS $(MACOS_MIN) and newer, against the libraries tools/macos_deps.sh built
+# for it in $(DEPS) (Homebrew's load only on the macOS they were installed on); MoltenVK and the Vulkan headers are
+# still Homebrew's
+DEPS     ?= third_party/macos-deps
+MACOS_MIN ?= 13.0
 EXE      := $(B)/mhgurecomp
+ifeq ($(RELEASE),1)
+MINFLAG  := -mmacosx-version-min=$(MACOS_MIN)
+OSFLAGS  := -I$(DEPS)/include -I$(BREW)/include $(MINFLAG)
+GENFLAGS += -fPIC $(MINFLAG)
+LIBDIRS  := -L$(DEPS)/lib -Wl,-rpath,$(abspath $(DEPS)/lib) $(MINFLAG)  # (the rpath: build/ runs too; make_app drops it)
+else
 OSFLAGS  := -I$(BREW)/include
 GENFLAGS += -fPIC
-LDFLAGS  := -L$(BREW)/lib -rdynamic -lSDL3 -lavformat -lavcodec -lavutil -lvulkan -lshaderc_shared -lpthread -lm \
+LIBDIRS  := -L$(BREW)/lib
+endif
+LDFLAGS  := $(LIBDIRS) -rdynamic -lSDL3 -lavformat -lavcodec -lavutil -lvulkan -lshaderc_shared -lpthread -lm \
             -framework Cocoa
 RT_OBJC  := runtime/platform/darwin_menu.m runtime/platform/darwin_settings.m  # (the Settings menu and window)
 GAMELIB  := $(B)/mhgugame.dylib
 # (a Mach-O bundle: the game code's imports of runtime functions resolve against the executable at link time)
-GAMELIB_LDFLAGS := -bundle -bundle_loader $(EXE)
+GAMELIB_LDFLAGS := -bundle -bundle_loader $(EXE) $(MINFLAG)
 else
 EXE      := $(B)/mhgurecomp
 OSFLAGS  :=
@@ -92,7 +105,7 @@ else
 RT_CXX   := $(O)/rt/nvn/vulkan/vma.o
 endif
 
-all: $(EXE) $(if $(GEN_SRC),$(GAMELIB)) $(if $(filter windows,$(PLATFORM)),bundle) data
+all: $(EXE) $(if $(GEN_SRC),$(GAMELIB)) $(if $(filter windows,$(PLATFORM)),bundle) $(if $(filter 1,$(RELEASE)),,data)
 
 $(O)/gen/%.o: $(GEN)/%.c runtime/cpu.h runtime/vfp.h runtime/neon_rt.h
 	@mkdir -p $(dir $@)
@@ -177,6 +190,29 @@ APP ?= app/MHGURecomp.app
 app: all
 	python3 tools/make_app.py $(B) $(GAME) $(APP)
 
+# macOS release (the zip players download, as upstream's Windows-/ArchLinux-MHGURecomp.<version>.zip):
+#   make macos-deps                        once: the libraries, built for macOS $(MACOS_MIN) (tools/macos_deps.sh)
+#   make release VERSION=0.9.11 [BONUS=<folder with the donor save's system file>]
+# builds into build-release/ and obj-release/ (your own build/ stays as it is), and makes release/MHGURecomp.app with
+# no game files in it (players put theirs in ~/Library/Application Support/MHGURecomp/data), zipped as
+# release/macOS-MHGURecomp.$(VERSION).zip.
+VERSION ?= $(shell git describe --tags --always 2>/dev/null)
+REL_B   ?= build-release
+REL_O   ?= obj-release
+REL_APP := release/MHGURecomp.app
+REL_ZIP := release/macOS-MHGURecomp.$(VERSION).zip
+macos-deps:
+	sh tools/macos_deps.sh $(DEPS) $(MACOS_MIN)
+release:
+	@for l in sdl3 vulkan-loader shaderc ffmpeg; do [ "$$(cat $(DEPS)/.$$l 2>/dev/null)" = "$(MACOS_MIN)" ] || \
+	    { echo "release: $$l for macOS $(MACOS_MIN) is not in $(DEPS): make macos-deps first"; exit 1; }; done
+	@[ -n "$(GEN_SRC)" ] || { echo "release: no generated code in $(GEN): make gen GAME=... first"; exit 1; }
+	$(MAKE) RELEASE=1 B=$(REL_B) O=$(REL_O) all
+	python3 tools/make_app.py --release --version $(VERSION) --min-macos $(MACOS_MIN) --libs $(DEPS)/lib \
+	    $(if $(BONUS),--bonus $(BONUS)) $(REL_B) $(REL_APP)
+	rm -f $(REL_ZIP) && ditto -c -k --keepParent $(REL_APP) $(REL_ZIP)
+	@echo "release: $(REL_ZIP)"
+
 # differential test of the recompiler against Unicorn (tools/test_lift.py)
 test-lift:
 	cd tools && ../$(PY) test_lift.py ../$(GAME)/exefs/main 0x00200000 --tests 6000
@@ -187,4 +223,4 @@ runtime-objs: $(RT_OBJ)
 clean:  # (keeps $(B)/data, and the settings, caches and saves wherever the game ran)
 	rm -rf $(O) $(B)/*.dll $(B)/*.so $(B)/*.dylib $(EXE) $(B)/vkprobe.exe
 
-.PHONY: all app gen test-lift runtime-objs clean bundle data FORCE
+.PHONY: all app macos-deps release gen test-lift runtime-objs clean bundle data FORCE
