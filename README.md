@@ -315,8 +315,9 @@ buttons), and screenshots come out black there.
 ### macOS (Apple Silicon)
 
 A native macOS build for Apple Silicon Macs: the Makefile picks `runtime/platform/darwin.c` when `uname -s` is
-`Darwin`, and rendering goes through MoltenVK (Vulkan on Metal). Tested on an M1 Pro: hunts, movies, audio and a
-controller with rumble, at 60 fps. Building needs Xcode's command line tools and [Homebrew](https://brew.sh).
+`Darwin`, and rendering goes through MoltenVK (Vulkan on Metal). Tested on an M1 Pro at 60 fps: hunts, movies,
+audio, a DualSense with rumble, Local Play with a Windows PC, mods, cheats and Forge plugins. Building needs Xcode's
+command line tools and [Homebrew](https://brew.sh).
 
 Everything is built for macOS 13 and newer (`MACOS_MIN`), so a build runs on other Macs too. Homebrew's libraries
 load only on the macOS they were installed on, so `make macos-deps` builds the ones the game loads from source, once,
