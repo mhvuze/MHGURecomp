@@ -60,7 +60,7 @@ const char *plat_home(void) { return g_home; }
             NSArray<NSString *> *kv = item.representedObject;
             char now[256] = "";
             config_get(kv[0].UTF8String, now, sizeof now);
-            item.state = config_same_value(now, kv[1].UTF8String) ? NSControlStateValueOn : NSControlStateValueOff;
+            item.state = config_same_value(kv[0].UTF8String, now, kv[1].UTF8String) ? NSControlStateValueOn : NSControlStateValueOff;
         } else if ([item.representedObject isKindOfClass:NSNumber.class]) {  // (a setting: its index)
             const ConfigSetting *st = &g_settings[[item.representedObject intValue]];
             char now[256] = "";
@@ -68,7 +68,7 @@ const char *plat_home(void) { return g_home; }
             NSString *label = str(now);
             NSArray<NSString *> *values = split(st->choices), *labels = split(st->labels);
             for (NSUInteger i = 0; i < values.count; i++)
-                if (config_same_value(now, values[i].UTF8String) && i < labels.count) label = labels[i];
+                if (config_same_value(st->key, now, values[i].UTF8String) && i < labels.count) label = labels[i];
             bool pending = !st->live && config_restart_pending(st->key);
             item.title = [NSString stringWithFormat:@"%@: %@%@", str(st->title), label, pending ? @"  (after restart)" : @""];
         }

@@ -668,7 +668,20 @@ bool config_get(const char *key, char *buf, size_t size) {
     return found;
 }
 
-bool config_same_value(const char *a, const char *b) {
+// What the parser makes of a value for a key: g_config (and render_auto) with it set, into *out; g_config unchanged.
+static bool parse_into(const char *key, const char *value, Config *out, bool *ra_out) {
+    Config saved = g_config;
+    bool ra = render_auto;
+    char v[256];
+    snprintf(v, sizeof v, "%s", value);
+    bool ok = set_key(key, v, -1);
+    *out = g_config, *ra_out = render_auto;
+    g_config = saved;
+    render_auto = ra;
+    return ok;
+}
+
+bool config_same_value(const char *key, const char *a, const char *b) {
     char x[128], y[128], *ex, *ey;
     snprintf(x, sizeof x, "%s", a);
     snprintf(y, sizeof y, "%s", b);
@@ -676,14 +689,18 @@ bool config_same_value(const char *a, const char *b) {
     squash(y);
     if (!strcmp(x, y)) return true;
     double dx = strtod(x, &ex), dy = strtod(y, &ey);  // (numbers: 1.0 == 1)
-    return ex != x && ey != y && !*ex && !*ey && dx == dy;
+    if (ex != x && ey != y && !*ex && !*ey) return dx == dy;
+    // (other spellings of one value, such as UIAnchor 1 for Center or MSAA 1x for Off: what the parser makes of them)
+    Config ca, cb;
+    bool ra, rb;
+    return key && parse_into(key, a, &ca, &ra) && parse_into(key, b, &cb, &rb) && ra == rb && !memcmp(&ca, &cb, sizeof ca);
 }
 
 bool config_restart_pending(const char *key) {
     char now[64];
     for (int i = 0; i < g_nsettings; i++) {
         if (key ? strcmp(g_settings[i].key, key) : g_settings[i].live) continue;
-        if (config_get(g_settings[i].key, now, sizeof now) && !config_same_value(now, g_start_values[i])) return true;
+        if (config_get(g_settings[i].key, now, sizeof now) && !config_same_value(g_settings[i].key, now, g_start_values[i])) return true;
     }
     return false;
 }
@@ -707,14 +724,9 @@ bool config_check(const char *key, const char *value) {
     if (!st) return false;
     // (the parser drops dashes - "Borderless-Window" - so "-1" would read as 1: no dash in a number or a size)
     if ((st->kind == SETTING_VALUE || st == &quest_setting) && strchr(value, '-')) return false;
-    Config saved = g_config;  // (set_key on the real one, then back: the parser is the judge)
-    bool ra = render_auto;
-    char v[256];
-    snprintf(v, sizeof v, "%s", value);
-    bool ok = set_key(key, v, -1);
-    g_config = saved;
-    render_auto = ra;
-    return ok;
+    Config parsed;  // (the parser is the judge)
+    bool ra;
+    return parse_into(key, value, &parsed, &ra);
 }
 
 bool config_help(const char *key, char *buf, size_t size) {

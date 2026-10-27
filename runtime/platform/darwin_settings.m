@@ -81,7 +81,7 @@ static MHGUSettingsWindow *g_settings_window;
             NSPopUpButton *p = (NSPopUpButton *)row.control;
             NSInteger at = -1;
             for (NSInteger i = 0; i < p.numberOfItems; i++)
-                if (config_same_value(now.UTF8String, [[p itemAtIndex:i].representedObject UTF8String])) at = i;
+                if (config_same_value(st->key, now.UTF8String, [[p itemAtIndex:i].representedObject UTF8String])) at = i;
             if (at < 0) {  // (a value the file has that isn't one of the choices: shown as it is)
                 [p addItemWithTitle:now];
                 p.lastItem.representedObject = now;
@@ -101,7 +101,7 @@ static MHGUSettingsWindow *g_settings_window;
 
 - (void)apply:(MHGURow *)row value:(NSString *)value {
     const ConfigSetting *st = row.setting;
-    if (config_same_value([self valueOf:st].UTF8String, value.UTF8String)) return;
+    if (config_same_value(st->key, [self valueOf:st].UTF8String, value.UTF8String)) return;
     if (!config_set(st->key, value.UTF8String)) {  // (not a value it takes: refused, the file's value shown again)
         NSBeep();
         row.note.stringValue = @"not a value this takes";

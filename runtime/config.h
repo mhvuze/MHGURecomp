@@ -79,7 +79,9 @@ extern const int g_nsettings;
 void config_path(char *buf, size_t size);  // the settings file
 // A setting's value as the file has it now (its default when the file lacks it), into buf; false: no such key.
 bool config_get(const char *key, char *buf, size_t size);
-bool config_same_value(const char *a, const char *b);  // two values as the parser reads them ("1.0" == "1", case)
+// Two values of a setting that the parser reads the same ("1.0" == "1", case, UIAnchor "1" == "Center"); key NULL: as
+// text and numbers only.
+bool config_same_value(const char *key, const char *a, const char *b);
 bool config_restart_pending(const char *key);  // its value in the file differs from the one the game started with
                                                 // (NULL: any setting that applies at the next start)
 // Writes the value into the file (in place: comments and other settings stay) and, for a live setting, into
