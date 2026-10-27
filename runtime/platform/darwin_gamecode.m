@@ -15,8 +15,7 @@
 
 #include "../gamelib.h"
 #include "../platform.h"
-
-static NSString *str(const char *s) { return [NSString stringWithUTF8String:s]; }
+#include "darwin_ui.h"
 
 // A tool's output (nil: it failed), without asking anything of the player.
 static NSString *tool_output(NSString *path, NSArray<NSString *> *args) {
@@ -34,15 +33,17 @@ static NSString *tool_output(NSString *path, NSArray<NSString *> *args) {
         stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
 }
 
+static NSString *xcrun(NSArray<NSString *> *args) {
+    return tool_output(@"/usr/bin/xcrun", [@[ @"--sdk", @"macosx" ] arrayByAddingObjectsFromArray:args]);
+}
+
 // The Command Line Developer Tools (or Xcode): xcode-select has a folder (asked first: xcrun without one offers
 // Apple's installer itself), and xcrun finds macOS's SDK, clang and python3 in it.
 static NSString *python_path(void) {
-    if (!tool_output(@"/usr/bin/xcode-select", @[ @"-p" ])) return nil;
-    for (NSString *what in @[ @"--show-sdk-path", @"--find" ])
-        if (!tool_output(@"/usr/bin/xcrun", [what isEqualToString:@"--find"] ? @[ @"--sdk", @"macosx", what, @"clang" ]
-                                                                           : @[ @"--sdk", @"macosx", what ]))
-            return nil;
-    return tool_output(@"/usr/bin/xcrun", @[ @"--sdk", @"macosx", @"--find", @"python3" ]);
+    if (!tool_output(@"/usr/bin/xcode-select", @[ @"-p" ]) || !xcrun(@[ @"--show-sdk-path" ]) ||
+        !xcrun(@[ @"--find", @"clang" ]))
+        return nil;
+    return xcrun(@[ @"--find", @"python3" ]);
 }
 
 // ---- the window

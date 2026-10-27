@@ -21,8 +21,9 @@ own exefs/ and romfs/ in ~/Library/Application Support/MHGURecomp/data (runtime/
 code from them on their Mac at its first start (runtime/platform/darwin_gamecode.m), with what it carries in
 Contents/Resources/gamecode: tools/build_gamecode.py, the code generator, the runtime headers the code includes and
 build.json (--gen-flags: the Makefile's GENFLAGS; --gamelib-id: the id the runtime was built with). Also: the version
-and --min-macos in Info.plist, the donor save of --bonus in Contents/Resources/bonus (runtime/services/bonus.c), no debug map, and a check
-that every binary in it loads on --min-macos and names no folder of this Mac, and that it holds no game code.
+and --min-macos in Info.plist, the donor save of --bonus in Contents/Resources/bonus (runtime/services/bonus.c), no
+debug map, and a check that every binary in it loads on --min-macos and names no folder of this Mac, and that it holds
+no game code.
 """
 import argparse
 import json
@@ -37,6 +38,10 @@ LIB_DIRS = []  # where @rpath references are looked up first (--libs)
 EXE = "mhgurecomp"
 GAMELIB = "mhgugame.dylib"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Homebrew's MoltenVK (the Makefile's BREW: `brew --prefix`)
+BREW = os.environ.get("BREW") or subprocess.run(["brew", "--prefix"], capture_output=True, text=True).stdout.strip() \
+    or "/opt/homebrew"
+MOLTENVK = os.path.join(BREW, "opt", "molten-vk")
 # what builds the game code on a player's Mac (tools/build_gamecode.py): {in Resources/gamecode: in the repository}
 GAMECODE_FILES = {
     "build_gamecode.py": "tools/build_gamecode.py",
@@ -182,7 +187,7 @@ def add_licenses(resources):
         if os.path.isdir(src):
             shutil.copytree(src, lic, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".complete"))
     os.makedirs(os.path.join(lic, "MoltenVK"), exist_ok=True)
-    shutil.copy2("/opt/homebrew/opt/molten-vk/LICENSE", os.path.join(lic, "MoltenVK", "LICENSE"))
+    shutil.copy2(os.path.join(MOLTENVK, "LICENSE"), os.path.join(lic, "MoltenVK", "LICENSE"))
     os.makedirs(os.path.join(lic, "MHGURecomp"), exist_ok=True)
     for f in ("LICENSE", "THIRD_PARTY_NOTICES"):
         shutil.copy2(os.path.join(REPO, f), os.path.join(lic, "MHGURecomp", f))
@@ -253,7 +258,7 @@ def main():
     for dst, src in roots.items():
         shutil.copy2(src, dst)
         drop_build_paths(dst, strip=a.release)
-    moltenvk_src = os.path.realpath("/opt/homebrew/opt/molten-vk/lib/libMoltenVK.dylib")
+    moltenvk_src = os.path.realpath(os.path.join(MOLTENVK, "lib", "libMoltenVK.dylib"))
     moltenvk = os.path.join(frameworks, "libMoltenVK.dylib")
     shutil.copy2(moltenvk_src, moltenvk)
     os.chmod(moltenvk, 0o755)
@@ -264,10 +269,10 @@ def main():
         add_rpath(os.path.join(frameworks, name), "@loader_path")
     print(f"make_app: {len(libs) + 1} libraries in Frameworks")
 
-    # Vulkan driver manifest (the runtime points the loader at it: runtime/nvn/vulkan/device.c)
+    # Vulkan driver manifest (the runtime points the loader at it: runtime/platform/darwin.c plat_init)
     icd_dir = os.path.join(resources, "vulkan", "icd.d")
     os.makedirs(icd_dir)
-    with open("/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json") as f:
+    with open(os.path.join(MOLTENVK, "etc", "vulkan", "icd.d", "MoltenVK_icd.json")) as f:
         icd = json.load(f)
     icd["ICD"]["library_path"] = "../../../Frameworks/libMoltenVK.dylib"
     with open(os.path.join(icd_dir, "MoltenVK_icd.json"), "w") as f:

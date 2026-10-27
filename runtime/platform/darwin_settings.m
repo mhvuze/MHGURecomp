@@ -14,9 +14,6 @@
 
 void ui_setting_changed(const char *key);  // (runtime/ui.c)
 
-static NSString *str(const char *s) { return [NSString stringWithUTF8String:s ? s : ""]; }
-static NSArray<NSString *> *split(const char *s) { return s ? [str(s) componentsSeparatedByString:@"|"] : @[]; }
-
 static NSTextField *label(NSString *text, CGFloat size, bool bold, bool secondary) {
     NSTextField *l = [NSTextField wrappingLabelWithString:text];
     l.font = bold ? [NSFont boldSystemFontOfSize:size] : [NSFont systemFontOfSize:size];

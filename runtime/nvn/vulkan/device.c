@@ -26,11 +26,6 @@ static pthread_mutex_t g_vk_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t volatile g_vk_owner;  // who holds it: exit() may run inside a submission, from the guest's own code
 static volatile bool exiting;     // exit() has begun: the driver's own teardown may be one step away
 static pthread_t vk_exit_thread;  // the thread running exit(): it may still enter here (the atexit handler drains)
-// No cache/vk_pipelines.bin under MoltenVK: it compiles every shader of a pipeline cache's initial data into a Metal
-// library in vkCreatePipelineCache, one after the other (~86 ms each with macOS's own shader cache cold: a new or
-// updated app), and a 200 MB cache held the first frame back for minutes. macOS keeps compiled shaders itself, and the
-// shader warm-up (exec.c) fills its cache in the background.
-static bool g_no_pcache_file;
 
 bool vk_exiting(void) { return exiting; }
 
@@ -165,7 +160,8 @@ static void create_device(void) {
     g_vk.stencil_export = has_ext(ep, ne, VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);  // (MSAA stencil resolve)
     if (g_vk.stencil_export) ext[n_ext++] = VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME;
     // A device that advertises VK_KHR_portability_subset (MoltenVK) must have it enabled.
-    if (has_ext(ep, ne, "VK_KHR_portability_subset")) ext[n_ext++] = "VK_KHR_portability_subset", g_no_pcache_file = true;
+    g_vk.portability = has_ext(ep, ne, "VK_KHR_portability_subset");
+    if (g_vk.portability) ext[n_ext++] = "VK_KHR_portability_subset";
     bool fsr4 = g_config.fsr && g_config.fsr_upscaler == FSR_UP_4 && vk_fsr4_device_exts(ep, ne, ext, &n_ext);  // FSR 4: its extensions
     free(ep);
 
@@ -259,12 +255,15 @@ static void create_device(void) {
                                   .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = g_vk.qfam};
     VK_CHECK(vkCreateCommandPool(g_vk.dev, &pi, NULL, &g_vk.pool));
 
-    // pipeline cache: cache/vk_pipelines.bin (written at exit; not under MoltenVK: g_no_pcache_file)
+    // pipeline cache: cache/vk_pipelines.bin (written at exit). Not under MoltenVK: it compiles every shader of a
+    // pipeline cache's initial data into a Metal library in vkCreatePipelineCache, one after the other (~86 ms each
+    // with macOS's own shader cache cold: a new or updated app), and a 200 MB cache held the first frame back for
+    // minutes. macOS keeps compiled shaders itself, and the shader warm-up (exec.c) fills its cache in the background.
     size_t sz = 0;
     void *data = NULL;
-    if (g_no_pcache_file && remove("cache/vk_pipelines.bin") == 0)
+    if (g_vk.portability && remove("cache/vk_pipelines.bin") == 0)
         LOG("[vk] cache/vk_pipelines.bin removed: MoltenVK compiled all of it before the first frame\n");
-    FILE *fp = g_no_pcache_file ? NULL : fopen("cache/vk_pipelines.bin", "rb");
+    FILE *fp = g_vk.portability ? NULL : fopen("cache/vk_pipelines.bin", "rb");
     if (fp) {
         fseek(fp, 0, SEEK_END);
         sz = (size_t)ftell(fp);
@@ -282,7 +281,7 @@ static void create_device(void) {
 }
 
 static void pipeline_cache_save(void) {
-    if (g_no_pcache_file) return;
+    if (g_vk.portability) return;  // (create_device: no file under MoltenVK)
     size_t sz = 0;
     if (vkGetPipelineCacheData(g_vk.dev, g_vk.pcache, &sz, NULL) != VK_SUCCESS || !sz) return;
     void *data = malloc(sz);
@@ -537,6 +536,7 @@ static void frame_end(const char *shot_path) {
                       // stalled the game ~0.8 s on a Retina Mac)
         vk_wait_seq(seq);
         ShotJob *j = malloc(sizeof *j);
+        if (!j) { LOG("[vk] saving %s failed: out of memory\n", shot_path); return; }
         j->w = g_vk.sc_extent.width, j->h = g_vk.sc_extent.height;
         j->bgr = g_vk.sc_format == VK_FORMAT_B8G8R8A8_UNORM || g_vk.sc_format == VK_FORMAT_B8G8R8A8_SRGB;
         j->px = malloc((size_t)j->w * j->h * 4);

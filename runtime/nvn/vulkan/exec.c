@@ -6,7 +6,8 @@
 //                         threads, draws needing them wait a bounded time, then are skipped until ready)
 //   MHGU_PIPE_WAIT_MS=n   per-frame budget for those waits (default 6; 0: skip at once)
 //   MHGU_PIPE_WORKERS=n   pipeline build workers (default: CPU cores - 2, 3 to 8)
-//   MHGU_NO_PREBUILD=1    don't prebuild / warm the game's programs ahead of their first draws (prebuild_programs)
+//   MHGU_PREBUILD=0|1     prebuild / warm the game's programs ahead of their first draws (prebuild_programs;
+//                         default: on under MoltenVK only)
 //   MHGU_NO_PROGRAM_CACHE=1  don't keep translated programs / pipeline states in cache/ for the next run to prebuild
 //   MHGU_SAVE_GLSL=1      translated shaders -> build/glsl/<code address>_<stage>.glsl
 //   MHGU_VK_STATS=1       draw / pass / skip counts in the log every 2 s (and shader / pipeline build stats)
@@ -1702,7 +1703,7 @@ static void tex_limit_check(Prog *p) {
         int n = st[i]->ntex, m = atomic_load(&tex_most);
         while (n > m && !atomic_compare_exchange_weak(&tex_most, &m, n)) {}
         if ((uint32_t)n > limit && atomic_fetch_add(&tex_over, 1) < 20)
-            LOG("[RED] %s shader %llx binds %d textures, over the GPU's %u per stage\n", i ? "fragment" : "vertex",
+            LOG("[shader] %s shader %llx binds %d textures, over the GPU's %u per stage\n", i ? "fragment" : "vertex",
                 (unsigned long long)p->code[i], n, limit);
     }
 }
@@ -2181,12 +2182,21 @@ static void build_pipeline(void *arg) {
 // disk: so each prebuilt program also gets a throwaway pipeline (a target per output, float4 vertex inputs) on the
 // warm workers, and an area's real pipelines come quickly the first time it is seen. cache/warmed.bin lists the
 // programs warmed (by content key), so a later run warms only what an earlier one didn't get to.
-// MHGU_NO_PREBUILD=1: off.
+// On by default under MoltenVK only, where it was measured; MHGU_PREBUILD=1 / 0 turns it on / off on any driver.
 #define WARMED_PATH "cache/warmed.bin"
 static pthread_mutex_t warm_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t warmed_tab[PROG_TAB];
 static FILE *warmed_f;
 static _Atomic int stat_warmed;
+
+static bool prebuild_on(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("MHGU_PREBUILD");
+        on = e ? atoi(e) != 0 : g_vk.portability;
+    }
+    return on;
+}
 
 static bool warmed_has(uint64_t ck, bool add) {  // add: record it (it is warm now)
     if (!ck) return false;
@@ -2207,6 +2217,7 @@ static bool warmed_has(uint64_t ck, bool add) {  // add: record it (it is warm n
 // Metal libraries across updates of the app, measured): it goes with the translator (the programs' file), the driver
 // and GPU, and on macOS the OS build (a new Metal compiler).
 static void warmed_init(const CacheHeader *phdr) {
+    if (!prebuild_on()) return;
     CacheHeader whdr = *phdr, *hdr = &whdr, fh;
     VkPhysicalDeviceProperties *pp = &g_vk.props;
     whdr.stamp = hash_words(whdr.stamp, (uint32_t[]){pp->driverVersion, pp->vendorID, pp->deviceID, 0}, 16);
@@ -2273,10 +2284,8 @@ static void prebuild_warm(Prog *p) {
     if (atomic_load(&p->state) == 1 && !p->prewarm) prewarm_pipelines(p);  // (already built: warm it now)
 }
 static void prebuild_programs(void) {
-    static int off = -1;
-    if (off < 0) off = getenv("MHGU_NO_PREBUILD") != NULL;
     int n = atomic_load(&g_nprograms);
-    if (off || (prebuilt_n >= n && variant_n >= prebuilt_n)) return;
+    if (prebuilt_n >= n && variant_n >= prebuilt_n) return;
     uint64_t t0 = plat_now_ns();
     int from = prebuilt_n;
     ShaderKey vkey = {0}, fkey = {0};
@@ -3608,9 +3617,11 @@ static void exec_list(uint64_t handle, int depth) {
 
 void backend_execute(uint64_t handle) {
     vk_lock();
-    prebuild_programs();
-    prebuild_report();
-    prebuild_status();
+    if (prebuild_on()) {
+        prebuild_programs();
+        prebuild_report();
+        prebuild_status();
+    }
     uint64_t t0 = plat_now_ns();
     exec_list(handle, 0);
     stat_exec_ns += plat_now_ns() - t0;

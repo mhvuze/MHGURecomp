@@ -26,7 +26,7 @@ Status: fully playable, but there may be some bugs. I've played a dozen hunts wi
 
 ## Requirements
 
-- OS: Windows 10/11 64-bit, or Linux
+- OS: Windows 10/11 64-bit, Linux, or macOS 13 or newer on an Apple Silicon Mac (see [macOS](#macos-apple-silicon))
 - CPU: Any CPU from 2014 or newer (needs AVX2 support)
 - GPU: Any GPU from 2016 or newer (needs Vulkan 1.2 support), and at least 1GB of VRAM
 - The game files for Monster Hunter Generations Ultimate, version 1.4.0. You can extract these from your Switch or Ryujinx with patches pre-applied.
@@ -103,7 +103,7 @@ inverted axes) apply to it too.
 
 When the game asks for text (names, chat), the keyboard types: Enter confirms, Escape cancels, Ctrl+V pastes.
 
-Other keys: Alt+Enter or F11 switches between windowed and full screen, F12 takes a screenshot, F7 cycles MSAA.
+Other keys: Alt+Enter (Option+Enter on a Mac) or F11 switches between windowed and full screen, F12 takes a screenshot, F7 cycles MSAA.
 
 ## Settings
 
@@ -312,17 +312,16 @@ own Vulkan driver (dzn, Vulkan on Direct3D 12) can't create the renderer's pipel
 one with `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json`. WSLg can't capture the mouse (clicks still work as
 buttons), and screenshots come out black there.
 
-### macOS (work in progress)
+### macOS (Apple Silicon)
 
-Apple Silicon, with Xcode's command line tools and [Homebrew](https://brew.sh). The Makefile picks
-`runtime/platform/darwin.c` when `uname -s` is `Darwin`; rendering goes through MoltenVK (Vulkan on Metal).
-Status: plays at 60 fps on an M1 Pro (hunts, movies, audio, controller with rumble).
+A native macOS build for Apple Silicon Macs: the Makefile picks `runtime/platform/darwin.c` when `uname -s` is
+`Darwin`, and rendering goes through MoltenVK (Vulkan on Metal). Tested on an M1 Pro: hunts, movies, audio and a
+controller with rumble, at 60 fps. Building needs Xcode's command line tools and [Homebrew](https://brew.sh).
 
 Everything is built for macOS 13 and newer (`MACOS_MIN`), so a build runs on other Macs too. Homebrew's libraries
 load only on the macOS they were installed on, so `make macos-deps` builds the ones the game loads from source, once,
-into `third_party/macos-deps` (`tools/macos_deps.sh`): SDL3, the Vulkan loader, shaderc and a small LGPL ffmpeg with
-only the demuxers and decoders the movies need. MoltenVK (macOS 12 and newer) and the Vulkan headers come from
-Homebrew.
+into `third_party/macos-deps` (`tools/macos_deps.sh`): SDL3, the Vulkan loader, shaderc and a small LGPL FFmpeg with
+only the demuxers and decoders the movies need. MoltenVK and the Vulkan headers come from Homebrew.
 
 ```bash
 brew install cmake pkg-config vulkan-headers molten-vk python@3.12
@@ -332,8 +331,13 @@ mkdir -p third_party/vk_mem_alloc && curl -fL -o third_party/vk_mem_alloc/vk_mem
 python3.12 -m venv tools/venv && tools/venv/bin/pip install -r tools/requirements.txt
 make gen GAME=../mhgu/game       # as above: the folder holding exefs/ and romfs/
 make -j10 GAME=../mhgu/game      # NULL_GPU=1: without the renderer
-cd build && ./mhgurecomp
+./run-game.sh                    # settings, caches and log.txt in run/, as run-game.bat
 ```
+
+`build/` holds `mhgurecomp`, `mhgugame.dylib` and `data/` (APFS clones of your game files: no extra disk space).
+Saves go to `~/Library/Application Support/MHGURecomp/save`, same layout as on Windows and Linux. Under lldb, the
+first touch of each guest page stops with `EXC_BAD_ACCESS`; let the runtime's handler take it with
+`process handle SIGSEGV SIGBUS -n false -p true -s false`.
 
 To play from Finder, make an app of the build:
 
@@ -341,39 +345,36 @@ To play from Finder, make an app of the build:
 make app GAME=../mhgu/game       # app/MHGURecomp.app
 ```
 
-`app/MHGURecomp.app` is self-contained: the runtime, the game code, your game files (APFS clones: no extra space on
-the same disk), the libraries it loads and MoltenVK, signed ad hoc for your Mac. Move it to Applications if
-you like. Everything it writes goes to `~/Library/Application Support/MHGURecomp`: `mhgurecomp.ini`, `mods/`,
-`cheats/`, `log.txt`, the shader caches and the saves. **Settings…** (⌘,) opens a window with every setting, in tabs;
-the **Settings** menu in the menu bar also changes the common ones (most at once, the rest after "Restart to Apply")
-and opens those folders. Its first start warms the game's shaders in the background
-(about 6 minutes on an M1 Pro; the log says how far). **The app contains game code and data made from your dump:
-never share it.**
+`app/MHGURecomp.app` is self-contained: the runtime, the game code, your game files (APFS clones), the libraries it
+loads and MoltenVK, signed ad hoc for your Mac. **It contains game code and data made from your dump: never share
+it.** Everything it writes goes to `~/Library/Application Support/MHGURecomp`: `mhgurecomp.ini`, `mods/`, `cheats/`,
+`log.txt`, the shader caches and the saves.
 
-`build/` holds `mhgurecomp`, `mhgugame.dylib` and `data/` (APFS clones of your game files: no extra disk space).
-Saves go to `~/Library/Application Support/MHGURecomp/save`, same layout as on Windows and Linux. Under lldb, the
-first touch of each guest page stops with `EXC_BAD_ACCESS`; let the runtime's handler take it with
-`process handle SIGSEGV SIGBUS -n false -p true -s false`.
+On the Mac, **Settings…** (⌘,) opens a window with every setting of `mhgurecomp.ini`, in tabs, each with the file's
+explanation; the **Settings** menu in the menu bar changes the common ones, even in full screen (most take effect at
+once, the rest after **Restart to Apply**) and opens the settings, mods, cheats and saves folders. Option+Enter or
+F11 switches between windowed and full screen. The first start warms the game's shaders in the background (about 6
+minutes on an M1 Pro; a line in the window's corner says how far), so new areas don't stutter later.
 
 #### Making a macOS release
 
 A release is the runtime as an app, with no game code and no game files in it, zipped like the Windows and Linux
 ones: `macOS-MHGURecomp.<version>.zip` holding `MHGURecomp.app` (about 8 MB). The game code is built on each
-player's Mac from their own game files the first time the app starts, the same steps as `make gen` and `make`: the app
-carries the code generator, the runtime headers the code includes and `tools/build_gamecode.py`, which runs them with
-macOS's own `python3` and `clang` (Apple's Command Line Developer Tools) into
+player's Mac from their own game files the first time the app starts, the same steps as `make gen` and `make`: the
+app carries the code generator, the runtime headers the code includes and `tools/build_gamecode.py`, which runs them
+with macOS's own `python3` and `clang` (Apple's Command Line Developer Tools) into
 `~/Library/Application Support/MHGURecomp/gamecode/`. Making a release needs no game files or generated code.
 
 ```bash
 make release VERSION=0.9.11 BONUS=<bonus folder>   # release/macOS-MHGURecomp.0.9.11.zip
 ```
 
-`BONUS` is the folder
-holding the donor save's `system` file (the `bonus` folder of the other releases); the app carries it in
-`Contents/Resources/bonus`. Leave `BONUS` out to make a release without bonus content. The app carries the license
-of every library in it in `Contents/Resources/Licenses` (with FFmpeg's source and configure line, as the LGPL asks);
-`make macos-deps` keeps them. `make_app` refuses to finish if one is missing, if the app holds game code, if any binary in it needs a newer macOS than `MACOS_MIN` or loads a library from outside the
-app and macOS, or if it names a folder in your home folder. The app is signed ad hoc, not notarized.
+`BONUS` is the folder holding the donor save's `system` file (the `bonus` folder of the other releases); the app
+carries it in `Contents/Resources/bonus`. Leave `BONUS` out to make a release without bonus content. The app carries
+the license of every library in it in `Contents/Resources/Licenses` (with FFmpeg's source and configure line, as the
+LGPL asks); `make macos-deps` keeps them. `make_app` refuses to finish if one is missing, if the app holds game code,
+if any binary in it needs a newer macOS than `MACOS_MIN` or loads a library from outside the app and macOS, or if it
+names a folder in your home folder. The app is signed ad hoc, not notarized.
 
 #### Installing a macOS release
 
@@ -391,8 +392,8 @@ app and macOS, or if it names a folder in your home folder. The app is signed ad
    → Privacy & Security → Local Network**).
 
 Everything else is in `~/Library/Application Support/MHGURecomp` too: `mhgurecomp.ini`, `mods/`, `cheats/`,
-`log.txt`, the game code (`gamecode/`, with the build's `build-log.txt`), the shader caches and the saves (`save/save_0`, as on Windows). Updating means replacing the app; your
-files stay where they are. Needs a Mac with Apple Silicon; the release is built for macOS 13 and newer.
+`log.txt`, the game code (`gamecode/`, with its `build-log.txt`), the shader caches and the saves (`save/save_0`, as
+on Windows). Updating means replacing the app; your files stay where they are.
 
 ## Repository layout
 

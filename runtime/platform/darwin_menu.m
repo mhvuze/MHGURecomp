@@ -28,13 +28,6 @@ void ui_setting_changed(const char *key);  // (runtime/ui.c)
 static MHGUSettingsMenu *g_menu_target;
 static char g_home[PATH_MAX];  // the game's home folder (plat_standalone made it the current folder)
 
-static NSString *str(const char *s) { return [NSString stringWithUTF8String:s ? s : ""]; }
-
-// The choice values / labels of a setting ('|' between them).
-static NSArray<NSString *> *split(const char *s) {
-    return s ? [str(s) componentsSeparatedByString:@"|"] : @[];
-}
-
 // This screen's size in pixels, below the camera housing where it has one (full screen windows stay below it).
 const char *plat_screen_size(void) {
     static char buf[32];
@@ -94,17 +87,15 @@ const char *plat_home(void) { return g_home; }
 void plat_restart_game(void) {
     // A shell waits for this process to end, then starts the game again: the app through LaunchServices, a bare
     // executable directly (with this environment). Then the window closes as from Quit.
-    char exe[PATH_MAX], cmd[3 * PATH_MAX];
+    char exe[PATH_MAX], pid_s[16];
     if (!plat_exe_path(exe, sizeof exe)) { NSBeep(); return; }
     char *app = strstr(exe, ".app/Contents/MacOS/");
-    if (app) {
-        app[4] = 0;
-        snprintf(cmd, sizeof cmd, "while kill -0 %d 2>/dev/null; do sleep 0.2; done; open -n '%s'", (int)getpid(), exe);
-    } else {
-        snprintf(cmd, sizeof cmd, "while kill -0 %d 2>/dev/null; do sleep 0.2; done; exec '%s'", (int)getpid(), exe);
-    }
+    if (app) app[4] = 0;
+    snprintf(pid_s, sizeof pid_s, "%d", (int)getpid());
+    const char *cmd = app ? "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; exec open -n \"$2\""
+                          : "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; exec \"$2\"";
     extern char **environ;
-    char *argv[] = {(char *)"/bin/sh", (char *)"-c", cmd, NULL};
+    char *argv[] = {(char *)"/bin/sh", (char *)"-c", (char *)cmd, (char *)"sh", pid_s, exe, NULL};
     pid_t pid;
     if (posix_spawn(&pid, "/bin/sh", NULL, NULL, argv, environ) != 0) { NSBeep(); return; }
     SDL_Event e = {.type = SDL_EVENT_QUIT};

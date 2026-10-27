@@ -4,9 +4,9 @@
 /obj/
 /build-linux/
 /obj-linux/
-/build-vk/
 /app/
-/obj-vk/
+/release/
+/third_party/macos-deps/
 /third_party/vk_mem_alloc/
 *.dylib
 /run/
@@ -27,6 +27,4 @@ __pycache__/
 *.7z
 /run2/
 /run3/
-/release/
-/third_party/macos-deps/
 /third_party/ffmpeg/
