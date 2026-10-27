@@ -1,5 +1,5 @@
 # MHGU Recomp build
-# Windows: MSYS2 UCRT64 (clang, lld, make; see README.md). Linux: clang (planned).
+# Windows: MSYS2 UCRT64 (clang, lld, make; see README.md). Linux: clang. macOS: Xcode's clang + make macos-deps.
 #
 #   make gen GAME=<folder with exefs/ and romfs/>   recompile the game code from your own dump into generated/
 #   make -j4                                        build build/mhgurecomp(.exe) and the game code library, with its
@@ -8,6 +8,8 @@
 UNAME := $(shell uname -s)
 ifneq ($(filter MINGW% MSYS% CYGWIN% Windows_NT,$(UNAME) $(OS)),)
 PLATFORM := windows
+else ifeq ($(UNAME),Darwin)
+PLATFORM := darwin
 else
 PLATFORM := linux
 endif
@@ -18,7 +20,11 @@ B        ?= build
 O        ?= obj
 CC       := clang
 CXX      := clang++
+ifeq ($(PLATFORM)-$(shell uname -m),darwin-arm64)
+GENARCH  ?= -mcpu=apple-m1    # Apple Silicon
+else
 GENARCH  ?= -march=x86-64-v3  # AVX2 + FMA (Haswell or newer)
+endif
 GENFLAGS := -O1 -fno-strict-aliasing -ffp-contract=off -fno-math-errno -Wno-return-type -Wno-unused-label \
             -Wno-parentheses-equality -Wno-unused-value -fvisibility=hidden -Iruntime $(GENARCH)
 
@@ -37,6 +43,10 @@ RT_HDRS  := $(wildcard runtime/*.h) $(wildcard runtime/platform/*.h) $(wildcard 
 # use: MP4 holding H.264 video and AAC audio. Nothing to install or ship (Linux distributions carry different FFmpeg
 # versions, and an executable linked to one doesn't start with another), and no GPL parts: FFmpeg's LGPL 2.1 only.
 # FFMPEG=system links the system's own avformat / avcodec / avutil instead.
+# (macOS: the one tools/macos_deps.sh builds into $(DEPS), shipped in the app like SDL3 and shaderc)
+ifeq ($(PLATFORM),darwin)
+FFMPEG        ?= system
+endif
 FFMPEG        ?= bundled
 FFMPEG_VER    := 9.0.2
 FFMPEG_SHA256 := 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
@@ -68,6 +78,30 @@ LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 -lSDL3 $(AV_LIBS) -lvulkan-1 -lsha
             -Wl,--export-all-symbols -Wl,--out-implib,$(O)/mhgurecomp.dll.a
 GAMELIB  := $(B)/mhgugame.dll
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld -static-libgcc $(O)/mhgurecomp.dll.a
+else ifeq ($(PLATFORM),darwin)
+# Built for macOS $(MACOS_MIN) and newer, against SDL3, ffmpeg, shaderc and the Vulkan loader that tools/macos_deps.sh
+# built for it in $(DEPS) (make macos-deps; Homebrew's load only on the macOS they were installed on). From Homebrew:
+# vulkan-headers and molten-vk (README.md); VMA in third_party/vk_mem_alloc
+BREW     ?= $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
+DEPS     ?= third_party/macos-deps
+MACOS_MIN ?= 13.0
+ifeq ($(wildcard $(DEPS)/lib/libSDL3.dylib),)
+ifeq ($(filter macos-deps gen clean test-lift,$(MAKECMDGOALS)),)
+$(error no libraries in $(DEPS): make macos-deps first (README.md, macOS))
+endif
+endif
+EXE      := $(B)/mhgurecomp
+MINFLAG  := -mmacosx-version-min=$(MACOS_MIN)
+OSFLAGS  := -I$(DEPS)/include -I$(BREW)/opt/vulkan-headers/include $(MINFLAG)
+GENFLAGS += -fPIC $(MINFLAG)
+# (the rpath: build/mhgurecomp runs from there; make_app replaces it with the app's Frameworks folder)
+LDFLAGS  := -L$(DEPS)/lib -Wl,-rpath,$(abspath $(DEPS)/lib) $(MINFLAG) -rdynamic -lSDL3 $(AV_LIBS) \
+            -lvulkan -lshaderc_shared -lpthread -lm -framework Cocoa
+# (the Settings menu and window; building the game code on a player's Mac)
+RT_OBJC  := runtime/platform/darwin_menu.m runtime/platform/darwin_settings.m runtime/platform/darwin_gamecode.m
+GAMELIB  := $(B)/mhgugame.dylib
+# (a Mach-O bundle: the game code's imports of runtime functions resolve against the executable at link time)
+GAMELIB_LDFLAGS := -bundle -bundle_loader $(EXE) $(MINFLAG)
 else
 EXE      := $(B)/mhgurecomp
 OSFLAGS  :=
@@ -88,13 +122,14 @@ GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/neon.py tools/nso.py tools/ga
                 runtime/hle/hle_symbols.txt runtime/cpu.h runtime/vfp.h runtime/neon_rt.h runtime/gamelib.h
 GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | sha256sum | cut -c1-16)
 
-RT_OBJ   = $(patsubst runtime/%.c,$(O)/rt/%.o,$(RT_SRC)) $(RT_CXX) $(O)/rt/overlay.o $(IMGUI_OBJ)
+RT_OBJ   = $(patsubst runtime/%.c,$(O)/rt/%.o,$(RT_SRC)) $(patsubst runtime/%.m,$(O)/rt/%.o,$(RT_OBJC)) $(RT_CXX) \
+           $(O)/rt/overlay.o $(IMGUI_OBJ)
 # Dear ImGui with cimgui's C API (third_party/cimgui: Forge plugins' ImGui, runtime/forge_imgui.c, overlay.cpp)
 IMGUI    := third_party/cimgui
 IMGUI_SRC := $(IMGUI)/cimgui.cpp $(addprefix $(IMGUI)/imgui/,imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_demo.cpp)
 IMGUI_SRC += $(if $(filter 1,$(NULL_GPU)),,$(IMGUI)/imgui/backends/imgui_impl_vulkan.cpp)
 IMGUI_OBJ := $(patsubst $(IMGUI)/%.cpp,$(O)/imgui/%.o,$(IMGUI_SRC))
-IMGUIFLAGS := -O2 -g -DCIMGUI_NO_EXPORT -I$(IMGUI) -I$(IMGUI)/imgui
+IMGUIFLAGS := -std=gnu++17 -O2 -g -DCIMGUI_NO_EXPORT -I$(IMGUI) -I$(IMGUI)/imgui
 # (vendored VulkanMemoryAllocator fallback: -I on a missing dir is ignored, so MSYS2 builds
 # with the system vulkan-memory-allocator package are unaffected)
 RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Ithird_party/vk_mem_alloc -I$(IMGUI) $(OSFLAGS)
@@ -154,24 +189,39 @@ $(O)/gen/tools/gamelib_entry.o: tools/gamelib_entry.c $(O)/gamelib.id
 $(O)/rt/gamelib.o: $(O)/gamelib.id
 $(O)/rt/gamelib.o: RTFLAGS += -DGAMELIB_ID='"$(GAMELIB_ID)"'
 
+# SHADER_ID / PIPELINE_ID: what the shader caches go with (runtime/nvn/vulkan/exec.c): cache/programs.bin and
+# warmed.bin with the translator, pipelines.bin with the pipeline code too. An update that leaves them alone keeps the
+# caches (they were tied to the executable: every build started them over).
+SHADER_SRCS := $(wildcard runtime/nvn/maxwell/*.c runtime/nvn/maxwell/*.h) runtime/nvn/vulkan/shaders.c runtime/nvn/vulkan/shaders.h
+SHADER_ID   := $(shell cat $(SHADER_SRCS) | sha256sum | cut -c1-16)
+PIPELINE_ID := $(shell cat $(SHADER_SRCS) runtime/nvn/vulkan/exec.c runtime/nvn/vulkan/vk.h | sha256sum | cut -c1-16)
+$(O)/shader.id: FORCE
+	@mkdir -p $(O); [ "$$(cat $@ 2>/dev/null)" = '$(SHADER_ID) $(PIPELINE_ID)' ] || echo '$(SHADER_ID) $(PIPELINE_ID)' > $@
+$(O)/rt/nvn/vulkan/exec.o: $(O)/shader.id
+$(O)/rt/nvn/vulkan/exec.o: RTFLAGS += -DSHADER_ID='"$(SHADER_ID)"' -DPIPELINE_ID='"$(PIPELINE_ID)"'
+
 $(O)/rt/%.o: runtime/%.c $(RT_HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(RTFLAGS) -c $< -o $@
+
+$(O)/rt/%.o: runtime/%.m $(RT_HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(RTFLAGS) -fobjc-arc -c $< -o $@
 
 $(O)/rt/forge_imgui.o: runtime/forge_imgui_thunks.inc $(IMGUI)/cimgui.h
 $(O)/rt/forge_imgui.o: RTFLAGS += -DCIMGUI_NO_EXPORT -Wno-unused-variable
 
 $(O)/rt/overlay.o: runtime/overlay.cpp runtime/overlay.h runtime/forge.h
 	@mkdir -p $(dir $@)
-	$(CXX) $(IMGUIFLAGS) $(if $(filter 1,$(NULL_GPU)),-DMHGU_NULL_BACKEND) -Wall -Iruntime -c $< -o $@
+	$(CXX) $(IMGUIFLAGS) $(if $(filter 1,$(NULL_GPU)),-DMHGU_NULL_BACKEND) -Wall -Iruntime $(OSFLAGS) -c $< -o $@
 
 $(O)/imgui/%.o: $(IMGUI)/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(IMGUIFLAGS) -w -c $< -o $@
+	$(CXX) $(IMGUIFLAGS) $(OSFLAGS) -w -c $< -o $@
 
 $(O)/rt/nvn/vulkan/vma.o: runtime/nvn/vulkan/vma.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) -O2 -w -Ithird_party/vk_mem_alloc -c $< -o $@
+	$(CXX) -O2 -w -Ithird_party/vk_mem_alloc $(OSFLAGS) -c $< -o $@
 
 $(O)/fsr/%.c.o: $(FSR)/%.c
 	@mkdir -p $(dir $@)
@@ -184,7 +234,7 @@ $(O)/fsr/%.cpp.o: $(FSR)/%.cpp
 $(EXE): $(RT_OBJ) $(AV_DEPS)
 	@mkdir -p $(dir $@)
 	$(CXX) -o $@ $^ $(LDFLAGS)
-ifneq ($(PLATFORM),windows)
+ifeq ($(PLATFORM),linux)  # (glibc: GLIBC_MAX)
 	@new=$$(objdump -T $@ | awk -v max=$(GLIBC_MAX) 'match($$0, /GLIBC_[0-9.]+/) { \
 	  split(substr($$0, RSTART + 6, RLENGTH - 6), v, "."); split(max, m, "."); \
 	  if (v[1] * 1000 + v[2] > m[1] * 1000 + m[2]) print "  " $$NF " (glibc " v[1] "." v[2] ")" }'); \
@@ -251,6 +301,8 @@ bundle: $(EXE) $(if $(GEN_SRC),$(GAMELIB))
 	@$(PY) tools/bundle_dlls.py "$$(cygpath -m "$$(dirname "$$(command -v $(CC))")")" $(B) $^ \
 	    --licenses $(B)/licenses --with $(LICENSE_PKGS)
 
+# (macOS: APFS clones, as free as hard links, which BSD cp can't make for a folder)
+CPLINK := $(if $(filter darwin,$(PLATFORM)),cp -cR,cp -rl)
 data: $(B)/data/.complete
 $(B)/data/.complete:
 	@if [ ! -f "$(GAME)/exefs/main" ] || [ ! -d "$(GAME)/romfs" ]; then \
@@ -258,7 +310,7 @@ $(B)/data/.complete:
 	else \
 	    mkdir -p $(B)/data && for d in exefs romfs; do \
 	        rm -rf "$(B)/data/$$d.tmp"; \
-	        cp -rl "$(GAME)/$$d" "$(B)/data/$$d.tmp" 2>/dev/null || { rm -rf "$(B)/data/$$d.tmp"; \
+	        $(CPLINK) "$(GAME)/$$d" "$(B)/data/$$d.tmp" 2>/dev/null || { rm -rf "$(B)/data/$$d.tmp"; \
 	            echo "data: no hard links here, copying $$d"; cp -r "$(GAME)/$$d" "$(B)/data/$$d.tmp"; } || exit 1; \
 	        rm -rf "$(B)/data/$$d" && mv "$(B)/data/$$d.tmp" "$(B)/data/$$d" || exit 1; \
 	    done && touch $@ && echo "data: game files in $(B)/data"; \
@@ -268,6 +320,33 @@ gen:
 	cd tools && ../$(PY) gen.py sdk ../$(GAME)/exefs/sdk 0x02400000 ../$(GEN)/sdk --hle ../runtime/hle/hle_symbols.txt
 	cd tools && ../$(PY) gen.py main ../$(GAME)/exefs/main 0x00200000 ../$(GEN)/main
 
+# macOS: a self-contained app of the build (tools/make_app.py): runtime, game code, game files (APFS clones), the
+# Homebrew libraries and MoltenVK; it writes to ~/Library/Application Support/MHGURecomp. For you only: never share it.
+APP ?= app/MHGURecomp.app
+app: all
+	python3 tools/make_app.py --libs $(DEPS)/lib $(B) $(GAME) $(APP)
+
+# macOS: the libraries of $(DEPS), built for macOS $(MACOS_MIN) (tools/macos_deps.sh; once, before the first build)
+macos-deps:
+	sh tools/macos_deps.sh $(DEPS) $(MACOS_MIN)
+
+# macOS release (the zip players download, as upstream's Windows-/ArchLinux-MHGURecomp.<version>.zip):
+#   make release VERSION=0.9.11 [BONUS=<folder with the donor save's system file>]
+# makes release/MHGURecomp.app of the runtime with no game code or game files in it, zipped as
+# release/macOS-MHGURecomp.$(VERSION).zip. Players put their game files in ~/Library/Application Support/MHGURecomp/data
+# and the app builds the game code from them on their Mac (tools/build_gamecode.py, with GENFLAGS and GAMELIB_ID).
+# Needs no game files or generated code here.
+VERSION ?= $(shell git describe --tags --always 2>/dev/null)
+REL_APP := release/MHGURecomp.app
+REL_ZIP := release/macOS-MHGURecomp.$(VERSION).zip
+release: $(EXE)
+	@for l in sdl3 vulkan-loader shaderc ffmpeg; do [ "$$(cat $(DEPS)/.$$l 2>/dev/null)" = "$(MACOS_MIN)" ] || \
+	    { echo "release: $$l for macOS $(MACOS_MIN) is not in $(DEPS): make macos-deps first"; exit 1; }; done
+	python3 tools/make_app.py --release --version $(VERSION) --min-macos $(MACOS_MIN) --libs $(DEPS)/lib \
+	    --gen-flags '$(GENFLAGS)' --gamelib-id $(GAMELIB_ID) $(if $(BONUS),--bonus $(BONUS)) $(B) $(REL_APP)
+	rm -f $(REL_ZIP) && ditto -c -k --keepParent $(REL_APP) $(REL_ZIP)
+	@echo "release: $(REL_ZIP)"
+
 # differential test of the recompiler against Unicorn (tools/test_lift.py)
 test-lift:
 	cd tools && ../$(PY) test_lift.py ../$(GAME)/exefs/main 0x00200000 --tests 6000
@@ -276,6 +355,6 @@ test-lift:
 runtime-objs: $(RT_OBJ)
 
 clean:  # (keeps $(B)/data, and the settings, caches and saves wherever the game ran)
-	rm -rf $(O) $(B)/*.dll $(B)/*.so $(EXE) $(B)/vkprobe.exe
+	rm -rf $(O) $(B)/*.dll $(B)/*.so $(B)/*.dylib $(EXE) $(B)/vkprobe.exe
 
-.PHONY: all gen test-lift runtime-objs clean bundle data licenses FORCE
+.PHONY: all app macos-deps release gen test-lift runtime-objs clean bundle data licenses FORCE

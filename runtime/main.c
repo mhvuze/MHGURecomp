@@ -3,6 +3,9 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __APPLE__
+#include <sys/stat.h>
+#endif
 
 #include "camera_jitter.h"
 #include "gamelib.h"
@@ -103,9 +106,25 @@ int main(int argc, char **argv) {
         char main_path[1200];
         snprintf(main_path, sizeof main_path, "%s/exefs/main", data);
         FILE *f = fopen(main_path, "rb");
+        if (!f && strcmp(data, "data")) {  // (or in MHGU_HOME's data\: a macOS release app has no game files inside)
+            snprintf(data, sizeof data, "data");
+            snprintf(main_path, sizeof main_path, "%s/exefs/main", data);
+            f = fopen(main_path, "rb");
+        }
         if (!f) {
             const char *msg = "The game files were not found. Put your own dump's exefs and romfs folders in the data "
                               "folder next to mhgurecomp.exe (data\\exefs, data\\romfs).";
+#ifdef __APPLE__
+            if (plat_in_app_bundle()) {  // (the player's folder is MHGU_HOME: open its data folder for them)
+                msg = "The game files were not found. Put your own dump's exefs and romfs folders in the data folder "
+                      "that just opened (~/Library/Application Support/MHGURecomp/data).";
+                mkdir("data", 0755);
+                if (system("open data") != 0) { /* the message says where it is */ }
+            } else {
+                msg = "The game files were not found. Put your own dump's exefs and romfs folders in the data folder "
+                      "next to mhgurecomp (data/exefs, data/romfs).";
+            }
+#endif
             fprintf(stderr, "%s\n", msg);
             plat_error_box(msg);
             return 1;
@@ -117,12 +136,20 @@ int main(int argc, char **argv) {
         fclose(f);
         if (!ok) {
             const char *msg = "The game files in the data folder are not version 1.4.0 of Monster Hunter Generations "
+#ifdef __APPLE__
+                              "Ultimate (data/exefs/main, build id FB08F1D20FD1204F). Dump the game with its 1.4.0 "
+#else
                               "Ultimate (data\\exefs\\main, build id FB08F1D20FD1204F). Dump the game with its 1.4.0 "
+#endif
                               "update applied (exefs from the update, romfs merged).";
             fprintf(stderr, "%s\n", msg);
             plat_error_box(msg);
             return 1;
         }
+#ifdef __APPLE__
+        // a release app carries no game code: it builds it from these files on the player's Mac, once
+        if (plat_in_app_bundle() && !plat_gamecode_ready(data)) return 1;
+#endif
     }
     { void fnprof_init(void); fnprof_init(); }
     crash_handler_install();

@@ -3,12 +3,15 @@
 //   MHGU_HIDDEN=1     no visible window (test runs; controls then come only from MHGU_INPUT)
 // Display mode, size and the 3D resolution come from the settings (runtime/config.c, mhgurecomp.ini).
 #include <stdlib.h>
+#include <string.h>
 
 #include <SDL3/SDL.h>
 
 #include "config.h"
 #include "mods.h"
 #include "rt.h"
+
+void backend_quit(void);  // (runtime/nvn: vulkan/device.c, backend_null.c)
 
 volatile uint64_t g_present_count;
 static SDL_Window *window;
@@ -30,6 +33,27 @@ static void fit_desktop(int *w, int *h) {
     if (fh > r.h) fh = r.h, fw = r.h * *w / *h;
     LOG("[ui] %dx%d does not fit the desktop: window %dx%d\n", *w, *h, fw, fh);
     *w = fw, *h = fh;
+}
+
+// The window in the picture's shape, so it shows no bars: the desktop or the window manager may make it narrower than
+// asked (macOS Stage Manager keeps a strip at the left: 1480x833 came out 1291x833), and the other side follows.
+// Resizing by hand keeps the shape too (the aspect ratio lock set at creation).
+static void fit_picture(void) {
+    float a = (float)g_config.render_w / (float)g_config.render_h;
+    int w = 0, h = 0, pw = 0, ph = 0;
+    SDL_SyncWindow(window);
+    SDL_GetWindowSize(window, &w, &h);
+    if (!w || !h || (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN)) return;
+    int fw = w, fh = h;
+    if ((float)w / (float)h > a + 0.01f) fw = (int)((float)h * a + 0.5f);
+    else if ((float)w / (float)h < a - 0.01f) fh = (int)((float)w / a + 0.5f);
+    if (fw != w || fh != h) {
+        SDL_SetWindowSize(window, fw, fh);
+        SDL_SyncWindow(window);
+    }
+    SDL_GetWindowSize(window, &fw, &fh);
+    SDL_GetWindowSizeInPixels(window, &pw, &ph);
+    LOG("[ui] window %dx%d (%dx%d pixels)%s\n", fw, fh, pw, ph, fw != w || fh != h ? ", narrowed to the picture's shape" : "");
 }
 
 // Full screen as the settings say (exclusive: the monitor mode closest to Resolution; else borderless desktop), or
@@ -56,6 +80,7 @@ static void set_fullscreen(bool on) {
         SDL_SyncWindow(window);
         fit_desktop(&win_w, &win_h);
         SDL_SetWindowSize(window, win_w, win_h);
+        fit_picture();
         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
     if (on) SDL_HideCursor(); else SDL_ShowCursor();
@@ -77,7 +102,27 @@ void ui_init(void) {
     if (getenv("MHGU_HIDDEN")) flags |= SDL_WINDOW_HIDDEN;
     window = SDL_CreateWindow("Monster Hunter Generations Ultimate", win_w, win_h, flags);
     if (!window) FATAL("SDL_CreateWindow: %s\n", SDL_GetError());
+    float a = (float)g_config.render_w / (float)g_config.render_h;
+    SDL_SetWindowAspectRatio(window, a, a);
+    fit_picture();
     if (g_config.display_mode != DISPLAY_WINDOWED) set_fullscreen(true);
+#ifdef __APPLE__
+    plat_menu_init();
+#endif
+}
+
+// A live setting was changed (the Settings menu: config_set has put it in g_config): apply what isn't read as the game
+// goes - the window mode, MSAA, the controller in the background.
+void ui_setting_changed(const char *key) {
+    if (!strcmp(key, "Mode")) {
+        if (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) set_fullscreen(false);  // (Borderless <-> Fullscreen too)
+        if (g_config.display_mode != DISPLAY_WINDOWED) set_fullscreen(true);
+    } else if (!strcmp(key, "MSAA")) {
+        void vk_set_msaa(uint32_t n);  // (runtime/nvn/vulkan/device.c, as F7)
+        vk_set_msaa((uint32_t)g_config.msaa);
+    } else if (!strcmp(key, "BackgroundInput")) {
+        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, g_config.background_input ? "1" : "0");
+    }
 }
 
 // Alt+Enter: windowed <-> the full-screen mode of the settings (Windowed in the settings: borderless).
@@ -90,7 +135,11 @@ int ui_run(void) {
         SDL_Event e;
         if (SDL_WaitEventTimeout(&e, 4)) {
             do {
-                if (e.type == SDL_EVENT_QUIT) { LOG("window closed\n"); exit(0); }
+                if (e.type == SDL_EVENT_QUIT) {
+                    LOG("window closed\n");
+                    backend_quit();  // (before exit(): runtime/nvn/vulkan/device.c exit_handler says why)
+                    exit(0);
+                }
                 host_input_event(&e);
             } while (SDL_PollEvent(&e));
         }

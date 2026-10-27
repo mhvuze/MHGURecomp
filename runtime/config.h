@@ -1,5 +1,7 @@
 // Player settings: mhgurecomp.ini in the game folder (written with the defaults when it is missing).
 #pragma once
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 enum { DISPLAY_WINDOWED, DISPLAY_FULLSCREEN, DISPLAY_BORDERLESS };
@@ -59,3 +61,37 @@ extern float g_fsr_lod_bias;       // FSR on: texture LOD bias for the lower ren
 float camera_fovy(float fovy, float aspect);  // a 3D camera's vertical field of view for its aspect (gen.py PATCHES)
 
 void config_load(void);  // before the window and the guest start
+
+// Every setting of the file but the per-quest Quest<number> entries, in file order (config.c g_settings): the macOS
+// Settings window shows them all (runtime/platform/darwin_settings.m), the Settings menu those marked menu
+// (runtime/platform/darwin_menu.m).
+enum { SETTING_CHOICE, SETTING_VALUE, SETTING_TEXT };  // one of choices / a value (choices suggested) / free text
+typedef struct {
+    const char *tab, *section, *key, *title;  // the window's tab, its ini section and key, its title
+    int kind;                                 // SETTING_*
+    const char *choices;                      // the values offered, as written in the ini, '|' between them
+    const char *labels;                       // their names, '|' between them (NULL: the values)
+    bool live;                                // takes effect at once (config_set); otherwise at the next start
+    bool menu;                                // offered in the Settings menu too
+} ConfigSetting;
+extern const ConfigSetting g_settings[];
+extern const int g_nsettings;
+void config_path(char *buf, size_t size);  // the settings file
+// A setting's value as the file has it now (its default when the file lacks it), into buf; false: no such key.
+bool config_get(const char *key, char *buf, size_t size);
+// Two values of a setting that the parser reads the same ("1.0" == "1", case, UIAnchor "1" == "Center"); key NULL: as
+// text and numbers only.
+bool config_same_value(const char *key, const char *a, const char *b);
+bool config_restart_pending(const char *key);  // its value in the file differs from the one the game started with
+                                                // (NULL: any setting that applies at the next start)
+// Writes the value into the file (in place: comments and other settings stay) and, for a live setting, into
+// g_config. The caller applies a live one where needed (runtime/ui.c ui_setting_changed). false: not a value the
+// setting takes (nothing written), or the file could not be written. Also Quest<number> keys (Monster HP per quest).
+bool config_set(const char *key, const char *value);
+bool config_check(const char *key, const char *value);  // a value the setting takes? (g_config unchanged)
+bool config_live(const char *key);  // takes effect at once
+// The explanation the default file gives a setting (its comment lines), into buf. "Quest": the per-quest entries'.
+bool config_help(const char *key, char *buf, size_t size);
+// The Quest<number> entries of the file, in order: fn(quest number, value, ctx) for each.
+void config_quests(void (*fn)(unsigned quest, const char *value, void *ctx), void *ctx);
+bool config_remove(const char *key);  // removes a Quest<number> entry (from the file, and from g_config)
