@@ -136,7 +136,11 @@ int main(int argc, char **argv) {
         fclose(f);
         if (!ok) {
             const char *msg = "The game files in the data folder are not version 1.4.0 of Monster Hunter Generations "
+#ifdef __APPLE__
+                              "Ultimate (data/exefs/main, build id FB08F1D20FD1204F). Dump the game with its 1.4.0 "
+#else
                               "Ultimate (data\\exefs\\main, build id FB08F1D20FD1204F). Dump the game with its 1.4.0 "
+#endif
                               "update applied (exefs from the update, romfs merged).";
             fprintf(stderr, "%s\n", msg);
             plat_error_box(msg);
