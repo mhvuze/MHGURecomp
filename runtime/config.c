@@ -726,7 +726,9 @@ bool config_help(const char *key, char *buf, size_t size) {
         if (line[0] == ';') {
             const char *c = line + 1;
             while (*c == ' ') c++;  // (and a continuation line's indent)
-            n += snprintf(block + n, n < sizeof block ? sizeof block - n : 0, "%s%s", n ? " " : "", c);
+            bool dflt = !strncmp(c, "Default:", 8);  // (on a line of its own; none when it names no value)
+            if (dflt && !c[8 + strspn(c + 8, " ")]) continue;
+            n += snprintf(block + n, n < sizeof block ? sizeof block - n : 0, "%s%s", !n ? "" : dflt ? "\n" : " ", c);
             if (n >= sizeof block) n = sizeof block - 1;
             continue;
         }

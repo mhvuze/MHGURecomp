@@ -234,7 +234,7 @@ $(O)/fsr/%.cpp.o: $(FSR)/%.cpp
 $(EXE): $(RT_OBJ) $(AV_DEPS)
 	@mkdir -p $(dir $@)
 	$(CXX) -o $@ $^ $(LDFLAGS)
-ifneq ($(PLATFORM),windows)
+ifeq ($(PLATFORM),linux)  # (glibc: GLIBC_MAX)
 	@new=$$(objdump -T $@ | awk -v max=$(GLIBC_MAX) 'match($$0, /GLIBC_[0-9.]+/) { \
 	  split(substr($$0, RSTART + 6, RLENGTH - 6), v, "."); split(max, m, "."); \
 	  if (v[1] * 1000 + v[2] > m[1] * 1000 + m[2]) print "  " $$NF " (glibc " v[1] "." v[2] ")" }'); \
