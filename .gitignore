@@ -29,3 +29,4 @@ __pycache__/
 /run3/
 /release/
 /third_party/macos-deps/
+/third_party/ffmpeg/
