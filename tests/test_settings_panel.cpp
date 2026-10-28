@@ -94,6 +94,13 @@ int main() {
 
     idle();
     selected("display.mode");
+    // A click outside the menu unfocuses every window; the menu takes its focus back (it used to assert in SetNavID)
+    io.AddMousePosEvent(4, 4);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    idle();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    idle();
+    selected("display.mode");
     confirm();
     selected("choice.2");
     back();
@@ -152,7 +159,7 @@ int main() {
     tab();
     selected("display.mode");
     tab();
-    down(4);
+    down(5);  // (fps, vsync, prewarm, msaa, fxaa)
     selected("volume");
     confirm();
     selected("volume");
@@ -187,7 +194,7 @@ int main() {
     assert(!settings_panel_dirty());
     assert(config_editable().volume == 99);
     press(ImGuiKey_Home);
-    down(4);
+    down(5);
     selected("volume");
     press(ImGuiKey_GamepadDpadRight);
     back();
@@ -321,7 +328,7 @@ int main() {
     press(ImGuiKey_GamepadL1);
     press(ImGuiKey_GamepadL1);
     selected("fps");
-    down(5);
+    down(6);
     selected("fsr");
     confirm();
     assert(settings_panel_dirty());
@@ -345,7 +352,7 @@ int main() {
     opened = true;
     idle();
     selected("fps");
-    down(2);
+    down(3);
     selected("volume");
     assert(!settings_panel_dirty()); // FSR-owned AA rows are disabled, not misleading live toggles.
     idle(20);

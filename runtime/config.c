@@ -16,7 +16,7 @@
 #include "config.h"
 #include "rt.h"
 
-#define CONFIG_DEFAULT_VALUES DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 0, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 100, 0, 0, 100, MENU_CONFIRM_ORIGINAL, 1, 0, FSR_NATIVE, 0.8f, 1, 0.9f, 1, FSR_UP_3, UPDATES_ASK
+#define CONFIG_DEFAULT_VALUES DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 0, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 100, 0, 0, 100, MENU_CONFIRM_ORIGINAL, 1, 0, FSR_NATIVE, 0.8f, 1, 0.9f, 1, FSR_UP_3, UPDATES_ASK, 1
 Config g_config = {CONFIG_DEFAULT_VALUES};
 Config config_defaults(void) { Config c = {CONFIG_DEFAULT_VALUES}; return c; }
 uint32_t g_render_size[2] = {1920, 1080};
@@ -107,6 +107,14 @@ static const char DEFAULT_INI[] =
     "\n"
     "; VSync\n"
     "VSync = On\n"
+    "\n"
+    "; Translate all of the game's shaders in the background at startup, so fewer things are drawn black the first time\n"
+    "; they appear. The first start does this in about 20 seconds while the logos play; it needs about 340 MB in the cache folder.\n"
+#ifdef __APPLE__
+    "; On the Mac each shader is also prepared for Metal, a few minutes on the first start (\"Preparing shaders\" in the window).\n"
+#endif
+    "; Default: On\n"
+    "ShaderPrewarm = On\n"
     "\n"
     "[Controls]\n"
     "; Controller face button layout. Set to \"Label\" to reverse A/B and X/Y on XBox controllers to match the button prompts (not recommended)\n"
@@ -230,6 +238,7 @@ const SettingRow g_setting_rows[] = {
     {"Graphics", "Upscaler", "AnimSurf", "FSR Animated Surfaces", SETTING_CHOICE, ONOFF, NULL, false, false},
     {"Graphics", "Performance", "FPS", "Frame Rate Cap", SETTING_VALUE, "30|60|90|120|144|240", NULL, true, true},
     {"Graphics", "Performance", "VSync", "VSync", SETTING_CHOICE, ONOFF, NULL, true, true},
+    {"Graphics", "Performance", "ShaderPrewarm", "Shader Prewarm", SETTING_CHOICE, ONOFF, NULL, false, true},
     {"Controls", "Controls", "FaceButtons", "Face Buttons", SETTING_CHOICE, "Position|Label",
      "By Position (Switch layout)|By Label", true, true},
     {"Controls", "Controls", "MenuConfirm", "Confirm in the F1 Menu", SETTING_CHOICE, "Original|South|East",
@@ -364,6 +373,7 @@ const ConfigSetting g_settings[] = {
     ON_OFF("Upscaler", "AnimSurf", fsr_animsurf, true),
     {"Performance", "FPS|FrameRate", SET_INT, F(fps), 0, 30, 240, NULL, NULL, false, ERR_MISC},
     ON_OFF("Performance", "VSync", vsync, false),
+    ON_OFF("Performance", "ShaderPrewarm", shader_prewarm, true),
     {"Controls", "FaceButtons", SET_CHOICE, F(face_buttons), 0, 0, 0, "Position|positional|nintendo,Label|labels|xbox",
      NULL, false, ERR_MISC},
     {"Controls", "MenuConfirm", SET_CHOICE, F(menu_confirm), 0, 0, 0, "Original,South,East", NULL, false, ERR_CONFIRM},
