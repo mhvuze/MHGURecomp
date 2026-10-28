@@ -1865,9 +1865,10 @@ static void translate_program(void *arg) {
 // ---- program cache: cache/programs.bin keeps every translated program (sources + reflection, keyed by a hash of the
 // guest code the translator reads and the shader keys), and the next run builds them all on the workers at its first
 // draw, as Ryujinx's shader cache does: an area's programs are then ready when it is entered (translation is serial
-// and was most of the wait). The file is tied to the translator (SHADER_ID: a hash of its sources, from the Makefile;
-// an update that leaves it alone keeps the file) and appended to as programs are translated (a killed run keeps them).
-// A build without SHADER_ID ties it to this executable instead (size + time stamp). MHGU_NO_PROGRAM_CACHE=1: off
+// and was most of the wait). The file is tied to the translator (SHADER_ID: a hash of its sources, from the Makefile,
+// and CACHE_FORMAT below; an update that leaves them alone keeps the file) and appended to as programs are translated
+// (a killed run keeps them). A build without SHADER_ID ties it to this executable instead (size + time stamp).
+// MHGU_NO_PROGRAM_CACHE=1: off
 // (also off with the translator debug options MHGU_SAVE_GLSL / MHGU_SAVE_MSL / MHGU_NO_DISCARD).
 #define PROG_TAB 16384  // (open addressing: room for every program of the package, ~6,300, and their variants)
 typedef struct {
@@ -1882,6 +1883,7 @@ typedef struct {
 static FILE *progcache_f;
 static bool progcache_on;
 typedef struct { char magic[8]; uint64_t stamp; } CacheHeader;
+#define CACHE_FORMAT 1  // bump when what a programs.bin / pipelines.bin record means changes here (ProgRec, PipeKey)
 static void pipecache_init(const CacheHeader *hdr);
 static void warmed_init(const CacheHeader *hdr);
 static uint64_t stat_prog_cached;
@@ -1936,9 +1938,10 @@ static void progcache_init(void) {
     if (getenv("MHGU_NO_PROGRAM_CACHE") || getenv("MHGU_SAVE_GLSL") || getenv("MHGU_SAVE_MSL") || getenv("MHGU_NO_DISCARD"))
         return;
     CacheHeader hdr = {"MHGUPRG", sizeof(ProgRec)}, fh;
+    hdr.stamp = hash_words(hdr.stamp, (uint64_t[]){CACHE_FORMAT}, 8);
 #ifdef SHADER_ID
-    hdr.stamp = hash_words(hdr.stamp, SHADER_ID, strlen(SHADER_ID));
-#else
+    hdr.stamp = hash_words(hdr.stamp, SHADER_ID, sizeof SHADER_ID - 1);
+#else  // (built without the Makefile's id: tied to this executable, size + time stamp)
     char exe[1024];
     struct stat es;
     if (!plat_exe_path(exe, sizeof exe) || stat(exe, &es)) return;
@@ -2965,7 +2968,7 @@ static uint64_t prog_fs_hash(Prog *p) {
 #define FXAA_FS_HASH 0x8530ded68f4407dfull
 static void copy_texture(const TexRef *src, const TexRef *dst, uint64_t flags);
 static bool fxaa_skipped(Prog *pr) {
-    if (g_config.fxaa || prog_fs_hash(pr) != FXAA_FS_HASH || pr->fi->ntex != 1 || !st.rt.ncolor || !st.rt.color[0])
+    if (config_live_fxaa() || prog_fs_hash(pr) != FXAA_FS_HASH || pr->fi->ntex != 1 || !st.rt.ncolor || !st.rt.color[0])
         return false;
     NvnTexture *src = shader_texture_object(1, &pr->fi->tex[0]);
     if (!src || src == st.rt.color[0]) return false;

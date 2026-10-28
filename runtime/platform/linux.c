@@ -64,6 +64,7 @@ static bool lazy_commit(uint64_t a) {
     return atomic_load(&g_chunk[idx]) == CHUNK_READY;  // (whoever won it backed the page: resume)
 }
 
+void (*plat_touch_hook)(uint64_t guest_addr, int write);
 static void fault_handler(int sig, siginfo_t *si, void *uc);
 
 bool plat_reserve_guest(uint64_t base, uint64_t size) {
@@ -136,6 +137,16 @@ void plat_init(void) {
     // send() on a dropped Local Play connection gives EPIPE here instead of killing the process: Windows reports
     // WSAEPIPE to the caller, which is what nn::socket expects.
     signal(SIGPIPE, SIG_IGN);
+}
+
+unsigned long plat_process_id(void) { return (unsigned long)getpid(); }
+bool plat_wait_process(unsigned long pid) {
+    struct timespec pause = {0, 10000000};
+    for (int i = 0; i < 3000; ++i) {
+        if (kill((pid_t)pid, 0) < 0) return errno == ESRCH;
+        nanosleep(&pause, NULL);
+    }
+    return false;
 }
 
 bool plat_exe_path(char *buf, size_t size) {
@@ -273,7 +284,10 @@ static const char *sig_name(int sig) {
 static void fault_handler(int sig, siginfo_t *si, void *uc) {
     ucontext_t *ctx = (ucontext_t *)uc;
     uint64_t fa = si && si->si_addr ? (uint64_t)(uintptr_t)si->si_addr : 0;
-    if ((sig == SIGSEGV || sig == SIGBUS) && lazy_commit(fa)) return;  // (a guest page first touched: back it, resume)
+    if ((sig == SIGSEGV || sig == SIGBUS) && lazy_commit(fa)) {  // (a guest page first touched: back it, resume)
+        if (plat_touch_hook) plat_touch_hook(fa - g_lo, (ctx->uc_mcontext.gregs[REG_ERR] & 2) != 0);
+        return;
+    }
     uint64_t pc = (uint64_t)ctx->uc_mcontext.gregs[REG_RIP];
     uint64_t sp = (uint64_t)ctx->uc_mcontext.gregs[REG_RSP], lr = 0, end = 0;
     if (plat_committed(sp, &end) && end - sp >= 8) lr = *(const uint64_t *)(uintptr_t)sp;

@@ -78,6 +78,9 @@ LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 -lSDL3 $(AV_LIBS) -lvulkan-1 -lsha
             -Wl,--export-all-symbols -Wl,--out-implib,$(O)/mhgurecomp.dll.a
 GAMELIB  := $(B)/mhgugame.dll
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld -static-libgcc $(O)/mhgurecomp.dll.a
+UPDATER  := $(B)/mhgurecomp-updater.exe
+# (a window program; zlib linked in, WinHTTP is Windows')
+UPD_LDFLAGS := -fuse-ld=lld -mwindows -lSDL3 -lwinhttp -Wl,-Bstatic -lz -Wl,-Bdynamic -static-libgcc
 else ifeq ($(PLATFORM),darwin)
 # Built for macOS $(MACOS_MIN) and newer, against SDL3, ffmpeg, shaderc and the Vulkan loader that tools/macos_deps.sh
 # built for it in $(DEPS) (make macos-deps; Homebrew's load only on the macOS they were installed on). From Homebrew:
@@ -102,6 +105,8 @@ RT_OBJC  := runtime/platform/darwin_menu.m runtime/platform/darwin_settings.m ru
 GAMELIB  := $(B)/mhgugame.dylib
 # (a Mach-O bundle: the game code's imports of runtime functions resolve against the executable at link time)
 GAMELIB_LDFLAGS := -bundle -bundle_loader $(EXE) $(MINFLAG)
+# (make test-settings / test-settings-panel: SDL from $(DEPS))
+TEST_LDFLAGS := -L$(DEPS)/lib -Wl,-rpath,$(abspath $(DEPS)/lib)
 else
 EXE      := $(B)/mhgurecomp
 OSFLAGS  :=
@@ -115,15 +120,22 @@ GLIBC_WRAP := sqrtf acosf atan2f sinh cosh
 LDFLAGS  += $(foreach f,$(GLIBC_WRAP),-Wl,--wrap=$(f))
 GAMELIB  := $(B)/mhgugame.so
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld
+UPDATER  := $(B)/mhgurecomp-updater
+# (libcurl: opened at run time, updater/http.c)
+UPD_LDFLAGS := -fuse-ld=lld -lSDL3 -lz -ldl
 endif
 
 # GAMELIB_ID: what the game code library is compiled against. A library with another id is refused at startup.
 GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/neon.py tools/nso.py tools/gamelib_entry.c \
                 runtime/hle/hle_symbols.txt runtime/cpu.h runtime/vfp.h runtime/neon_rt.h runtime/gamelib.h
 GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | sha256sum | cut -c1-16)
+# VERSION: this build's release (git describe: 0.10.3 on a release's tag, 0.10.3-4-gabc1234 after it), in the log and
+# the updater's (updater/updater.c: only a build of exactly a release updates itself). make dist VERSION=0.10.4 for a
+# release built before its tag is made.
+VERSION ?= $(shell git describe --tags 2>/dev/null || echo unknown)
 
 RT_OBJ   = $(patsubst runtime/%.c,$(O)/rt/%.o,$(RT_SRC)) $(patsubst runtime/%.m,$(O)/rt/%.o,$(RT_OBJC)) $(RT_CXX) \
-           $(O)/rt/overlay.o $(IMGUI_OBJ)
+           $(O)/rt/overlay.o $(O)/rt/settings_panel.o $(IMGUI_OBJ)
 # Dear ImGui with cimgui's C API (third_party/cimgui: Forge plugins' ImGui, runtime/forge_imgui.c, overlay.cpp)
 IMGUI    := third_party/cimgui
 IMGUI_SRC := $(IMGUI)/cimgui.cpp $(addprefix $(IMGUI)/imgui/,imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_demo.cpp)
@@ -172,7 +184,14 @@ else
 RT_CXX   := $(O)/rt/nvn/vulkan/vma.o $(FSR_OBJ)
 endif
 
-all: $(EXE) $(if $(GEN_SRC),$(GAMELIB)) $(if $(filter windows,$(PLATFORM)),bundle) data licenses
+all: $(EXE) $(if $(GEN_SRC),$(GAMELIB)) $(UPDATER) $(if $(filter windows,$(PLATFORM)),bundle) data licenses
+
+# Host-only INI/settings regression test: no game dump or generated code required.
+.PHONY: test-settings
+test-settings:
+	@mkdir -p $(O)/settings-test
+	$(CC) $(RTFLAGS) tests/test_settings.c runtime/config.c runtime/config_store.c $(TEST_LDFLAGS) -lSDL3 -lm -o $(O)/settings-test/test-settings$(if $(filter windows,$(PLATFORM)),.exe)
+	$(O)/settings-test/test-settings$(if $(filter windows,$(PLATFORM)),.exe) $(O)/settings-test/settings.ini
 
 $(O)/gen/%.o: $(GEN)/%.c runtime/cpu.h runtime/vfp.h runtime/neon_rt.h
 	@mkdir -p $(dir $@)
@@ -188,13 +207,17 @@ $(O)/gen/tools/gamelib_entry.o: tools/gamelib_entry.c $(O)/gamelib.id
 	$(CC) $(GENFLAGS) -DGAMELIB_ID='"$(GAMELIB_ID)"' -c $< -o $@
 $(O)/rt/gamelib.o: $(O)/gamelib.id
 $(O)/rt/gamelib.o: RTFLAGS += -DGAMELIB_ID='"$(GAMELIB_ID)"'
+$(O)/version.id: FORCE
+	@mkdir -p $(O); [ "$$(cat $@ 2>/dev/null)" = '$(VERSION)' ] || echo '$(VERSION)' > $@
+$(O)/rt/main.o: $(O)/version.id
+$(O)/rt/main.o: RTFLAGS += -DMHGU_VERSION='"$(VERSION)"'
 
 # SHADER_ID / PIPELINE_ID: what the shader caches go with (runtime/nvn/vulkan/exec.c): cache/programs.bin and
 # warmed.bin with the translator, pipelines.bin with the pipeline code too. An update that leaves them alone keeps the
 # caches (they were tied to the executable: every build started them over).
 SHADER_SRCS := $(wildcard runtime/nvn/maxwell/*.c runtime/nvn/maxwell/*.h) runtime/nvn/vulkan/shaders.c runtime/nvn/vulkan/shaders.h
-SHADER_ID   := $(shell cat $(SHADER_SRCS) | sha256sum | cut -c1-16)
-PIPELINE_ID := $(shell cat $(SHADER_SRCS) runtime/nvn/vulkan/exec.c runtime/nvn/vulkan/vk.h | sha256sum | cut -c1-16)
+SHADER_ID   := $(shell cat $(SHADER_SRCS) | tr -d '\r' | sha256sum | cut -c1-16)
+PIPELINE_ID := $(shell cat $(SHADER_SRCS) runtime/nvn/vulkan/exec.c runtime/nvn/vulkan/vk.h | tr -d '\r' | sha256sum | cut -c1-16)
 $(O)/shader.id: FORCE
 	@mkdir -p $(O); [ "$$(cat $@ 2>/dev/null)" = '$(SHADER_ID) $(PIPELINE_ID)' ] || echo '$(SHADER_ID) $(PIPELINE_ID)' > $@
 $(O)/rt/nvn/vulkan/exec.o: $(O)/shader.id
@@ -215,6 +238,10 @@ $(O)/rt/overlay.o: runtime/overlay.cpp runtime/overlay.h runtime/forge.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(IMGUIFLAGS) $(if $(filter 1,$(NULL_GPU)),-DMHGU_NULL_BACKEND) -Wall -Iruntime $(OSFLAGS) -c $< -o $@
 
+$(O)/rt/settings_panel.o: runtime/settings_panel.cpp runtime/settings_panel.h runtime/config.h runtime/settings_locale.h runtime/settings_icons.h runtime/app_actions.h runtime/overlay.h
+	@mkdir -p $(dir $@)
+	$(CXX) $(IMGUIFLAGS) -Wall -Iruntime $(OSFLAGS) -c $< -o $@
+
 $(O)/imgui/%.o: $(IMGUI)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(IMGUIFLAGS) $(OSFLAGS) -w -c $< -o $@
@@ -234,12 +261,27 @@ $(O)/fsr/%.cpp.o: $(FSR)/%.cpp
 $(EXE): $(RT_OBJ) $(AV_DEPS)
 	@mkdir -p $(dir $@)
 	$(CXX) -o $@ $^ $(LDFLAGS)
-ifeq ($(PLATFORM),linux)  # (glibc: GLIBC_MAX)
-	@new=$$(objdump -T $@ | awk -v max=$(GLIBC_MAX) 'match($$0, /GLIBC_[0-9.]+/) { \
+	$(GLIBC_CHECK)
+
+# The updater (updater/updater.c): started in place of the game, it installs the latest release and starts the game.
+UPD_OBJ  := $(patsubst updater/%.c,$(O)/updater/%.o,$(wildcard updater/*.c))
+$(O)/updater/%.o: updater/%.c updater/updater.h $(O)/version.id
+	@mkdir -p $(dir $@)
+	$(CC) -O2 -g -Wall $(OSFLAGS) -DMHGU_VERSION='"$(VERSION)"' -c $< -o $@
+$(UPDATER): $(UPD_OBJ)
+	@mkdir -p $(dir $@)
+	$(CC) -o $@ $^ $(UPD_LDFLAGS)
+	$(GLIBC_CHECK)
+
+# (Linux: a program starts with glibc GLIBC_MAX or later, see LDFLAGS; this checks the one just linked)
+ifeq ($(PLATFORM),linux)
+define GLIBC_CHECK
+@new=$$(objdump -T $@ | awk -v max=$(GLIBC_MAX) 'match($$0, /GLIBC_[0-9.]+/) { \
 	  split(substr($$0, RSTART + 6, RLENGTH - 6), v, "."); split(max, m, "."); \
 	  if (v[1] * 1000 + v[2] > m[1] * 1000 + m[2]) print "  " $$NF " (glibc " v[1] "." v[2] ")" }'); \
 	if [ -n "$$new" ]; then printf '%s needs a glibc newer than $(GLIBC_MAX) for:\n%s\n(add them to GLIBC_WRAP and runtime/platform/linux.c)\n' \
 	  $@ "$$new"; rm -f $@; exit 1; fi
+endef
 endif
 
 # the bundled FFmpeg (see FFMPEG above): download, check, configure, build into $(FFMPEG_DIR)
@@ -296,8 +338,8 @@ PY := $(firstword $(wildcard tools/venv/Scripts/python.exe) $(wildcard tools/ven
 # log.txt are written only when the game runs). run-game.bat runs it with those in run/ (MHGU_HOME), not here.
 # (--with: MSYS2 packages linked into the executable or into a bundled DLL, whose licenses go along too: the static
 # GCC runtime, VulkanMemoryAllocator, and glslang / SPIRV-Tools inside shaderc's DLL)
-LICENSE_PKGS := libstdc++ libgcc libwinpthread vulkan-memory-allocator glslang spirv-tools
-bundle: $(EXE) $(if $(GEN_SRC),$(GAMELIB))
+LICENSE_PKGS := libstdc++ libgcc libwinpthread vulkan-memory-allocator glslang spirv-tools zlib
+bundle: $(EXE) $(if $(GEN_SRC),$(GAMELIB)) $(UPDATER)
 	@$(PY) tools/bundle_dlls.py "$$(cygpath -m "$$(dirname "$$(command -v $(CC))")")" $(B) $^ \
 	    --licenses $(B)/licenses --with $(LICENSE_PKGS)
 
@@ -336,7 +378,6 @@ macos-deps:
 # release/macOS-MHGURecomp.$(VERSION).zip. Players put their game files in ~/Library/Application Support/MHGURecomp/data
 # and the app builds the game code from them on their Mac (tools/build_gamecode.py, with GENFLAGS and GAMELIB_ID).
 # Needs no game files or generated code here.
-VERSION ?= $(shell git describe --tags --always 2>/dev/null)
 REL_APP := release/MHGURecomp.app
 REL_ZIP := release/macOS-MHGURecomp.$(VERSION).zip
 release: $(EXE)
@@ -355,6 +396,29 @@ test-lift:
 runtime-objs: $(RT_OBJ)
 
 clean:  # (keeps $(B)/data, and the settings, caches and saves wherever the game ran)
-	rm -rf $(O) $(B)/*.dll $(B)/*.so $(B)/*.dylib $(EXE) $(B)/vkprobe.exe
+	rm -rf $(O) $(B)/*.dll $(B)/*.so $(B)/*.dylib $(EXE) $(UPDATER) $(B)/vkprobe.exe
 
-.PHONY: all app macos-deps release gen test-lift runtime-objs clean bundle data licenses FORCE
+# make dist VERSION=0.10.4: the release archive of the build folder, for GitHub (tools/dist.py): in $(DIST)/,
+# Windows-MHGURecomp.<version>.zip or ArchLinux-MHGURecomp.<version>.tar.gz (permissions kept), holding the programs,
+# the game code, the DLLs, licenses/, BONUS (the donor save for bonus/system, when given) and the empty folders the
+# player fills; never the game files, mods, settings or caches of $(B). It prints each archive's size and SHA-256.
+DIST  ?= dist
+BONUS ?= $(wildcard $(B)/bonus/system)
+dist: all
+	@echo '$(VERSION)' | grep -Eq '^[0-9]+(\.[0-9]+)*$$' || \
+	  { echo "dist: '$(VERSION)' is not a release version: make dist VERSION=<the release's tag, e.g. 0.10.4>"; exit 1; }
+	$(PY) tools/dist.py $(B) $(DIST) $(PLATFORM) $(VERSION) $(if $(BONUS),--bonus "$(BONUS)")
+
+.PHONY: all app macos-deps release gen test-lift runtime-objs clean bundle data licenses dist FORCE
+
+# Exercise real ImGui navigation without a game dump or graphics device.
+.PHONY: test-settings-panel
+test-settings-panel: $(O)/rt/settings_panel.o $(O)/rt/config.o $(O)/rt/config_store.o $(O)/imgui/imgui/imgui.o $(O)/imgui/imgui/imgui_draw.o $(O)/imgui/imgui/imgui_tables.o $(O)/imgui/imgui/imgui_widgets.o
+	@mkdir -p $(O)/settings-test
+	$(CXX) $(IMGUIFLAGS) -Iruntime $(OSFLAGS) tests/test_settings_panel.cpp $^ $(TEST_LDFLAGS) -lSDL3 -o $(O)/settings-test/test-settings-panel$(if $(filter windows,$(PLATFORM)),.exe)
+	$(O)/settings-test/test-settings-panel$(if $(filter windows,$(PLATFORM)),.exe)
+
+# Translation coverage for both host-menu languages; no game files required.
+.PHONY: test-settings-locale
+test-settings-locale:
+	$(PY) tests/test_settings_locale.py

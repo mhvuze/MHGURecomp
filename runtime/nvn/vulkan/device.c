@@ -316,12 +316,15 @@ void vk_set_msaa(uint32_t n) {
 }
 
 // ================================================================== swapchain
+static int swapchain_vsync = -1;
+static int configured_msaa = -1;
 static VkPresentModeKHR present_mode(void) {
+    swapchain_vsync = config_live_vsync();
     // MAILBOX by default: no tearing, and the game paces itself (its own 30 fps vsync waits); with FIFO the game's frames
     // also queued behind the display's, dropping to ~26 fps on the R9. FIFO where there is no mailbox.
     const char *e = getenv("MHGU_VK_PRESENT"), *v = getenv("MHGU_VSYNC");
     if (!e && v) e = atoi(v) ? "fifo" : "immediate";
-    if (!e) e = g_config.vsync ? "mailbox" : "immediate";  // (mhgurecomp.ini VSync)
+    if (!e) e = swapchain_vsync ? "mailbox" : "immediate";  // (mhgurecomp.ini VSync)
     VkPresentModeKHR want = !strcmp(e, "fifo") ? VK_PRESENT_MODE_FIFO_KHR
                           : !strcmp(e, "immediate") ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
     uint32_t n = 0;
@@ -446,6 +449,11 @@ static bool frame_begin(void) {
     int w, h;
     SDL_GetWindowSizeInPixels(ui_window(), &w, &h);
     if (!w || !h) return false;  // minimised
+    // All GPU mutations happen here under vk_lock(), after resolving the old
+    // scene. Existing attachment caches defer old image destruction safely.
+    int msaa = config_live_msaa();
+    if (configured_msaa < 0) configured_msaa = g_config.msaa;
+    if (msaa != configured_msaa) { vk_set_msaa((uint32_t)msaa); configured_msaa = msaa; }
     // Recreate once the window has held its new pixel size for a few frames: during a full-screen switch or a live
     // resize it changes every frame, each recreation waits for the GPU, and on macOS SDL's size and the Metal layer's
     // (MoltenVK's currentExtent) disagree until the animation ends - leaving full screen recreated it 85 frames in a
@@ -453,7 +461,9 @@ static bool frame_begin(void) {
     static int last_w, last_h, held;
     if (w != last_w || h != last_h) last_w = w, last_h = h, held = 0;
     else if (held < 3) held++;
-    if (!g_vk.swapchain || (held >= 3 && (sc_stale || w != sc_req_w || h != sc_req_h))) recreate_swapchain();
+    if (!g_vk.swapchain || config_live_vsync() != swapchain_vsync ||
+        (held >= 3 && (sc_stale || w != sc_req_w || h != sc_req_h)))
+        recreate_swapchain();
     if (!g_vk.swapchain) return false;
     slot = (slot + 1) % FRAMES;
     if (!acquire_sem[slot]) acquire_sem[slot] = binary_semaphore();

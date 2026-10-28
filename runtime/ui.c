@@ -8,10 +8,48 @@
 #include <SDL3/SDL.h>
 
 #include "config.h"
+#include "app_actions.h"
+#include "overlay.h"
 #include "mods.h"
 #include "rt.h"
 
 void backend_quit(void);  // (runtime/nvn: vulkan/device.c, backend_null.c)
+static void quit(void) {
+    LOG("window closed\n");
+    backend_quit();  // (before exit(): runtime/nvn/vulkan/device.c exit_handler says why)
+    exit(0);
+}
+static int launch_argc;
+static char **launch_argv;
+static SDL_AtomicInt requested_action, action_failed;
+void ui_capture_launch_args(int argc, char **argv) { launch_argc = argc; launch_argv = argv; }
+void ui_request_action(bool restart) { SDL_SetAtomicInt(&requested_action, restart ? 2 : 1); }
+bool ui_action_failed(void) { return SDL_SetAtomicInt(&action_failed, 0) != 0; }
+static bool restart_application(void) {
+    char exe[4096], wait[80];
+    if (!plat_exe_path(exe, sizeof exe)) return false;
+    const char **args = calloc((size_t)launch_argc + 3, sizeof *args);
+    if (!args) return false;
+    int n = 0;
+    args[n++] = exe;
+    for (int i = 1; i < launch_argc; ++i)
+        if (strncmp(launch_argv[i], "--recomp-wait=", 14)) args[n++] = launch_argv[i];
+    snprintf(wait, sizeof wait, "--recomp-wait=%lu", plat_process_id());
+    args[n++] = wait;
+    SDL_PropertiesID props = SDL_CreateProperties();
+    SDL_SetPointerProperty(props, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, (void *)args);
+    SDL_SetBooleanProperty(props, SDL_PROP_PROCESS_CREATE_BACKGROUND_BOOLEAN, true);
+    SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_INHERITED);
+    SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDERR_NUMBER, SDL_PROCESS_STDIO_INHERITED);
+    SDL_Process *child = SDL_CreateProcessWithProperties(props);
+    SDL_DestroyProperties(props);
+    free(args);
+    if (!child) { LOG("[ui] restart failed: %s\n", SDL_GetError()); return false; }
+    LOG("[ui] restart child %lld waiting for %lu\n", (long long)SDL_GetNumberProperty(
+        SDL_GetProcessProperties(child), SDL_PROP_PROCESS_PID_NUMBER, 0), plat_process_id());
+    SDL_DestroyProcess(child);
+    return true;
+}
 
 volatile uint64_t g_present_count;
 static SDL_Window *window;
@@ -89,8 +127,8 @@ static void set_fullscreen(bool on) {
 void ui_init(void) {
     if (!SDL_Init(SDL_INIT_VIDEO)) FATAL("SDL_Init: %s\n", SDL_GetError());
     config_load();
-    // the controller in the background (ini BackgroundInput): SDL's hint, set before its gamepads start (some of its
-    // Windows input backends only read it then); keyboard and mouse events only ever reach the focused window
+    // Initial background input policy. SDL documents this hint as changeable at runtime.
+    // Subsequent saved changes are consumed by the host thread in ui_run().
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, g_config.background_input ? "1" : "0");
     if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) FATAL("SDL_InitSubSystem: %s\n", SDL_GetError());
     win_w = g_config.width, win_h = g_config.height;
@@ -111,17 +149,13 @@ void ui_init(void) {
 #endif
 }
 
-// A live setting was changed (the Settings menu: config_set has put it in g_config): apply what isn't read as the game
-// goes - the window mode, MSAA, the controller in the background.
+// A live setting was changed (the Settings menu: config_set has put it in g_config and the live values): apply what
+// isn't read as the game goes - the window mode. (MSAA, VSync and the controller in the background follow the live
+// values: device.c frame_begin, ui_run.)
 void ui_setting_changed(const char *key) {
     if (!strcmp(key, "Mode")) {
         if (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) set_fullscreen(false);  // (Borderless <-> Fullscreen too)
         if (g_config.display_mode != DISPLAY_WINDOWED) set_fullscreen(true);
-    } else if (!strcmp(key, "MSAA")) {
-        void vk_set_msaa(uint32_t n);  // (runtime/nvn/vulkan/device.c, as F7)
-        vk_set_msaa((uint32_t)g_config.msaa);
-    } else if (!strcmp(key, "BackgroundInput")) {
-        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, g_config.background_input ? "1" : "0");
     }
 }
 
@@ -131,17 +165,33 @@ void ui_toggle_fullscreen(void) {
 }
 
 int ui_run(void) {
+    int background = config_live_background_input();
     for (;;) {
+        int wanted_background = config_live_background_input();
+        if (wanted_background != background) {
+            SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, wanted_background ? "1" : "0");
+            background = wanted_background;
+        }
         SDL_Event e;
         if (SDL_WaitEventTimeout(&e, 4)) {
             do {
                 if (e.type == SDL_EVENT_QUIT) {
-                    LOG("window closed\n");
-                    backend_quit();  // (before exit(): runtime/nvn/vulkan/device.c exit_handler says why)
-                    exit(0);
+                    if (!config_confirm_exit() && !overlay_settings_dirty()) quit();
+                    overlay_request_close();
+                    continue;
                 }
                 host_input_event(&e);
             } while (SDL_PollEvent(&e));
+        }
+        int action = SDL_SetAtomicInt(&requested_action, 0);
+        if (action == 1) quit();
+        if (action == 2) {
+#ifdef __APPLE__
+            if (plat_restart_game()) quit();  // (the app again through LaunchServices: darwin_menu.m)
+#else
+            if (restart_application()) quit();
+#endif
+            SDL_SetAtomicInt(&action_failed, 1);
         }
         host_input_update();
         cheats_frame();

@@ -12,6 +12,11 @@
 #include "hle.h"
 #include "kernel.h"
 #include "mods.h"
+#include "app_actions.h"
+
+#ifndef MHGU_VERSION
+#define MHGU_VERSION "unknown"  // (the Makefile gives the build's release: VERSION)
+#endif
 
 const char *g_game_dir = "game";  // folder holding exefs/ and romfs/ (the player's own dump)
 
@@ -78,6 +83,13 @@ static void boot(const char *root) {
 }
 
 int main(int argc, char **argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (!strncmp(argv[i], "--recomp-wait=", 14)) {
+            char *end; unsigned long pid = strtoul(argv[i] + 14, &end, 10);
+            if (!pid || *end || !plat_wait_process(pid)) return 1;
+        }
+    }
+    ui_capture_launch_args(argc, argv);
     plat_init();
     setvbuf(stderr, NULL, _IONBF, 0);
     bool given = false;
@@ -151,6 +163,7 @@ int main(int argc, char **argv) {
         if (plat_in_app_bundle() && !plat_gamecode_ready(data)) return 1;
 #endif
     }
+    LOG("MHGU Recomp %s\n", MHGU_VERSION);
     { void fnprof_init(void); fnprof_init(); }
     crash_handler_install();
     ui_init();

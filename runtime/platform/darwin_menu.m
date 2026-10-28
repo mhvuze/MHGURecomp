@@ -2,7 +2,7 @@
 // it shares with the Settings window (darwin_ui.h, runtime/platform/darwin_settings.m).
 //
 // "Settings..." (Cmd-,) opens the window, which has every setting. The menu offers the common ones (the settings
-// table's menu entries: runtime/config.c g_settings) for a quick change, even in full screen: a submenu per ini
+// table's menu entries: runtime/config.c g_setting_rows) for a quick change, even in full screen: a submenu per ini
 // section, one per setting with its choices, the current one checked. Choosing writes mhgurecomp.ini (config_set); a
 // live setting takes effect at once (runtime/ui.c ui_setting_changed), the others are marked until "Restart to
 // Apply". Below: the settings file, and the folders the game keeps its files in (the settings folder is the game's
@@ -15,6 +15,7 @@
 #include <spawn.h>
 #include <unistd.h>
 
+#include "../app_actions.h"
 #include "../config.h"
 #include "../platform.h"
 #include "darwin_ui.h"
@@ -62,7 +63,7 @@ const char *plat_home(void) { return g_home; }
             config_get(kv[0].UTF8String, now, sizeof now);
             item.state = config_same_value(kv[0].UTF8String, now, kv[1].UTF8String) ? NSControlStateValueOn : NSControlStateValueOff;
         } else if ([item.representedObject isKindOfClass:NSNumber.class]) {  // (a setting: its index)
-            const ConfigSetting *st = &g_settings[[item.representedObject intValue]];
+            const SettingRow *st = &g_setting_rows[[item.representedObject intValue]];
             char now[256] = "";
             config_get(st->key, now, sizeof now);
             NSString *label = str(now);
@@ -80,15 +81,15 @@ const char *plat_home(void) { return g_home; }
     return YES;
 }
 
-- (void)restart:(id)sender { (void)sender; plat_restart_game(); }
+- (void)restart:(id)sender { (void)sender; ui_request_action(true); }
 - (void)showSettings:(id)sender { (void)sender; plat_settings_show(); }
 @end
 
-void plat_restart_game(void) {
+bool plat_restart_game(void) {
     // A shell waits for this process to end, then starts the game again: the app through LaunchServices, a bare
-    // executable directly (with this environment). Then the window closes as from Quit.
+    // executable directly (with this environment). The caller then quits (runtime/ui.c, ui_request_action).
     char exe[PATH_MAX], pid_s[16];
-    if (!plat_exe_path(exe, sizeof exe)) { NSBeep(); return; }
+    if (!plat_exe_path(exe, sizeof exe)) return false;
     char *app = strstr(exe, ".app/Contents/MacOS/");
     if (app) app[4] = 0;
     snprintf(pid_s, sizeof pid_s, "%d", (int)getpid());
@@ -97,9 +98,7 @@ void plat_restart_game(void) {
     extern char **environ;
     char *argv[] = {(char *)"/bin/sh", (char *)"-c", (char *)cmd, (char *)"sh", pid_s, exe, NULL};
     pid_t pid;
-    if (posix_spawn(&pid, "/bin/sh", NULL, NULL, argv, environ) != 0) { NSBeep(); return; }
-    SDL_Event e = {.type = SDL_EVENT_QUIT};
-    SDL_PushEvent(&e);
+    return posix_spawn(&pid, "/bin/sh", NULL, NULL, argv, environ) == 0;
 }
 
 @implementation MHGUSettingsMenu (Folders)
@@ -151,8 +150,8 @@ void plat_menu_init(void) {
         const char *section = "";
         [menu addItem:action_item(@"Settings…", @selector(showSettings:), @",")];
         [menu addItem:NSMenuItem.separatorItem];
-        for (int i = 0; i < g_nsettings; i++) {
-            const ConfigSetting *st = &g_settings[i];
+        for (int i = 0; i < g_nsetting_rows; i++) {
+            const SettingRow *st = &g_setting_rows[i];
             if (!st->menu) continue;
             if (strcmp(st->section, section)) {  // (a new ini section: a submenu of its own)
                 section = st->section;

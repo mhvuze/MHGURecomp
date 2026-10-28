@@ -27,7 +27,9 @@ static void ImGui_ImplVulkan_UpdateTexture(ImTextureData *) {}
 #endif
 
 #include "forge.h"
+#include "menu_confirm.h"
 #include "overlay.h"
+#include "settings_panel.h"
 
 #define LOG(...) fprintf(stderr, __VA_ARGS__)
 
@@ -42,6 +44,7 @@ static std::atomic<bool> g_forge_frames;  // forge.c's frame hook builds the fra
 static std::mutex g_status_lock;
 static char g_status[160];
 static std::atomic<bool> g_status_on;
+static std::atomic<bool> g_settings_open, g_forge_open;
 static int g_menu_key;
 static float g_font_size;
 static ImGuiStyle g_base_style;  // (unscaled; scaled copies follow the window's height)
@@ -127,20 +130,43 @@ static ImGuiKey key_of(SDL_Scancode sc, SDL_Keycode kc) {
 }
 
 static void set_open(bool open) {
-    g_open = open;
+    g_forge_open = open;
+    g_open = open || g_settings_open;
     SDL_Window *w = ui_window();
-    if (open) SDL_ShowCursor();  // (full screen hides it: runtime/ui.c)
+    if (g_open) SDL_ShowCursor();  // (full screen hides it: runtime/ui.c)
     else if (w && (SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN)) SDL_HideCursor();
     Ev e = {};
     e.kind = Ev::CLEAR;  // (keys and buttons held as it opens or closes: released)
     queue(e);
-    LOG("[forge] menu %s\n", open ? "open" : "closed");
+    LOG("[overlay] forge %s, settings %s\n", open ? "open" : "closed", g_settings_open ? "open" : "closed");
+}
+
+static std::atomic<int> g_face_positions[4] = {1, 0, 3, 2};
+void overlay_face_positions(const int positions[4]) {
+    for (int i = 0; i < 4; ++i) g_face_positions[i] = positions[i];
+}
+int overlay_face_position(int semantic) { return g_face_positions[semantic & 3]; }
+void overlay_request_close(void) {
+    settings_panel_request_close();
+    g_settings_open = true;
+    set_open(g_forge_open);
+}
+bool overlay_settings_dirty(void) { return settings_panel_dirty(); }
+void overlay_toggle_settings(void) {
+    if (!g_enabled) return;
+    if (g_settings_open) { settings_panel_request_back(); return; }
+    g_settings_open = true;
+    set_open(g_forge_open);
 }
 
 bool overlay_event(const SDL_Event *e) {
     if (!g_enabled) return false;
+    if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && e->key.scancode == SDL_SCANCODE_F1) {
+        overlay_toggle_settings();
+        return true;
+    }
     if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && g_menu_key > 0 && (int)e->key.scancode == g_menu_key) {
-        set_open(!g_open);
+        set_open(!g_forge_open);
         return true;
     }
     if (!g_open) return false;
@@ -229,6 +255,24 @@ static void apply_input(ImGuiIO &io) {
     }
     // the controller (as Forge maps it: A activates, B cancels, the left stick and the d-pad move)
     if (!g_open) pad = {};
+    // Apply only to settings. Forge retains its existing semantic A/B mapping.
+    if (g_settings_open) {
+        int a = overlay_face_position(0), b = overlay_face_position(1);
+        int confirm, cancel;
+        menu_confirm_buttons(config_live_menu_confirm(), a, b, pad.a, pad.b, &confirm, &cancel);
+        pad.a = confirm; pad.b = cancel;
+    }
+    static int last_policy = -1;
+    static bool wait_release, was_settings;
+    if (g_settings_open && !was_settings) wait_release = true;
+    was_settings = g_settings_open;
+    int policy = g_settings_open ? config_live_menu_confirm() : MENU_CONFIRM_ORIGINAL;
+    if (last_policy >= 0 && policy != last_policy) wait_release = true;
+    last_policy = policy;
+    if (wait_release) {
+        if (!pad.a && !pad.b) wait_release = false;
+        pad.a = pad.b = false;
+    }
     io.AddKeyEvent(ImGuiKey_GamepadFaceDown, pad.a);
     io.AddKeyEvent(ImGuiKey_GamepadFaceRight, pad.b);
     io.AddKeyEvent(ImGuiKey_GamepadFaceUp, pad.x);
@@ -398,6 +442,7 @@ static void snap_clear(void) {
 void overlay_frame(void *cpu) {
     if (cpu) g_forge_frames = true;
     if (!g_ready) return;
+    if (!g_settings_open) { bool closed = false; settings_panel(&closed); }
     bool open = g_open, free_render = cpu && forge_plugins_have(FORGE_IMGUI_FREE_RENDER), status = g_status_on;
     ImGuiIO &io = ImGui::GetIO();
     if (!open && !free_render && !status) {  // (nothing to draw)
@@ -429,20 +474,29 @@ void overlay_frame(void *cpu) {
         forge_imgui_init(cpu);
     }
     ImGui_ImplVulkan_NewFrame();
+    settings_panel_before_frame(g_settings_open);
     ImGui::NewFrame();
-    if (open) {
+    bool settings = g_settings_open;
+    settings_panel(&settings);
+    if (settings_panel_confirming()) settings = true;
+    if (settings != g_settings_open) { g_settings_open = settings; set_open(g_forge_open); }
+    if (g_forge_open) {
         bool keep = true;
         ImGui::SetNextWindowPos(ImVec2(40 * scale, 40 * scale), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(420 * scale, 360 * scale), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("forge", &keep)) {
             if (ImGui::CollapsingHeader("About Forge")) {
-                ImGui::Text("Forge API 1.5.1, by the port (MHGU Recomp)");
-                ImGui::SeparatorText("Forge developers");
+                ImGui::Text("Version: %s", "1.5.1");
+                ImGui::SeparatorText("Developers");
                 ImGui::BulletText("Fexty");
                 ImGui::BulletText("jeffi2287");
-                ImGui::SeparatorText("Libraries used");
-                ImGui::BulletText("Dear ImGui %s", IMGUI_VERSION);
-                ImGui::BulletText("cimgui");
+
+                ImGui::SeparatorText("Libraries Used");
+                ImGui::BulletText("devkitARM/libnx (32-bit)");
+                ImGui::BulletText("NNSDK");
+                ImGui::BulletText("switch-tools");
+                ImGui::BulletText("iniparser");
+                ImGui::BulletText("Dear ImGui");
             }
             if (ImGui::CollapsingHeader("Loaded Plugins")) {
                 const char *names[16];

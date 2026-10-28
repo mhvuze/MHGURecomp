@@ -349,6 +349,8 @@ Test setup (scratchpad, not in the repo): quest 404 (Hunt a Volvidon) moved to t
 stage from; the Arena's b_m09em062_00 spawn), MHGU_QUICKHUNT=404, then the hunter walks from the waiting room (north
 2 s, east 2.7 s, north through the gate: an area change, so the hunter can't be placed there by poking its position).
 
+Buff icons and the frame rate (2026-10-28): fixed. Reported: with two or more buffs the icon beside a name on the HUD's status plates (yours, the other hunters', the Palicoes') takes turns far too fast at 240 fps. The plates (cUIOStatusPlate / cUIOStatusPlateGuests, update 0x834314) call 0x834d00 once per update for each of their two icon slots ({index, countdown, shown} at plate +0xf0 / +0xfc; tables of 54 and 36 icons at image 0x1839250 / 0x18395b0, tested against the player's buff flags +0x2840..+0x2864, rebuilt from the buff timers each update at 0x49f0xx): the countdown drops by 1 per update and is reloaded with 20, 0.67 s at 30 fps, 0.08 s at 240. Fix (runtime/hle/buffcycle.c, tools/gen.py PATCHES): the decrement (0x834d20) takes step / 2 updates (at most 1) in 1/65536 units and the reload (0x834ef4) is 20 of those. Checked at 240 fps (test save, quest 101, two buffs from their timers: player +0x287c and +0x2880 poked to 3000): the two icons change every 0.667 s, 12 times in 8 s.
+
 ## Fidelity audit (2026-10-20)
 
 Silent-bug sweep after the shimmer and shadow fixes (the two classes found: a driver needing explicit barriers, and a
@@ -373,7 +375,9 @@ pipeline cache), so ~1100-1230 draws were skipped over 13 frames. Now (exec.c):
 - a draw whose program / pipeline is still building waits for it, up to MHGU_PIPE_WAIT_MS (default 6) per frame in
   all, and its job moves to the front of its queue;
 - cache/programs.bin keeps every translated program (GLSL + reflection, keyed by a hash of the guest code the
-  translator reads + the shader keys; tied to the executable's size / time stamp, so a rebuild starts it afresh), and
+  translator reads + the shader keys; tied to the translator: the Makefile's SHADER_ID, a hash of
+  runtime/nvn/maxwell/translate.c + shader.h, and exec.c's CACHE_FORMAT, so updates that leave the translator alone
+  keep it, as Ryujinx's cache does; until 2026-10-28 any rebuild started it afresh), and
   cache/pipelines.bin each pipeline's state (program by content key, render pass by formats). The next run builds them
   all on the workers at its first draw (~130 programs + ~170 pipelines: well under a second, during the logos), like
   Ryujinx's shader cache. Both are appended as they grow, so a killed run keeps them. MHGU_NO_PROGRAM_CACHE=1: off.
@@ -381,10 +385,65 @@ Village load on the R9 (warm caches): 0 skipped draws on entering (was 1064 / 12
 logo frames), slowest frame 56-62 ms (was 83, the load hitch itself), steady 57 fps unchanged. First run ever (empty
 caches): 761 skipped over 9 frames (was 1230 over 13): translation throughput bound, waits cap at 6 ms a frame.
 Known gaps that remain:
-- A program never seen before (first run, or after a rebuild) can still be missing for a few frames when many arrive
+- A program never seen before (first run, or after the translator changed) can still be missing for a few frames when many arrive
   at once.
 - R9 200 approximations: no custom border colours (nearest standard colour), D24S8 stored as D32F_S8 (polygon-offset
   units differ for decals).
+
+## Updater (2026-10-28)
+
+`mhgurecomp-updater(.exe)` (updater/, built by `make` beside the game) is a separate program that is started instead
+of the game. It installs GitHub's latest release over its own folder when it is newer, then starts the game. The game
+itself has no networking for this and never changes: `mhgurecomp` always just starts the game.
+- Flow (updater/updater.c):
+  - It reads `[Application] Updates` from mhgurecomp.ini. `Ask` (the default) or `Auto` checks for an update, `Off`
+    goes straight to the game. The setting is a g_settings row and is in the settings menu; the game ignores it.
+  - It asks for `GET /repos/morerokk/MHGURecomp/releases/latest`, which never returns drafts or pre-releases (the
+    `draft` / `prerelease` fields are checked as well), with a 5 s timeout and the last ETag (`update/latest.etag`,
+    `latest.json`: a 304 reuses the saved JSON).
+  - It compares the tag numerically with its own MHGU_VERSION and only installs a strictly newer one.
+  - It picks the asset by name prefix (`Windows-`, `ArchLinux-` / `Linux-`; `.tar.gz` before `.zip`), downloads it to
+    `update/<asset>.part` and checks the size and the `sha256:` digest GitHub keeps per asset. An asset without a
+    digest is not installed.
+  - It extracts to `update/new/`, dropping the archive's single top folder. Unsafe paths (`..`, absolute, `:`) are
+    refused, and the player's own files are never written (`data mods cheats bonus cache shots save update
+    mhgurecomp.ini log.txt`).
+  - It moves each file it replaces to `update/backup/` and renames the new one in. On a failure everything is put
+    back. update/backup and update/new are removed at the next start; Windows can't delete the running updater's own
+    exe and SDL3.dll, but it can rename them, which is how the updater replaces itself.
+  - Before installing it refuses if the game is running from that folder (Windows: the exe or game DLL can't be
+    opened for writing; Linux: /proc/*/exe).
+  - On Linux it sets 0755 on the programs and `.so` files, taken from the tar's modes or by name, since a zip made on
+    Windows has none.
+  - It starts the game with the arguments it was given, minus its own (`--update-force`, `--update-no-launch`).
+    Windows: CreateProcess with CREATE_NO_WINDOW, so the game logs to log.txt as it does from Explorer, then waits for
+    it and returns its exit code, so Steam sees the game run. Linux: execv, the same process.
+  - No connection, GitHub's rate limit (403/429; 60 an hour unauthenticated, and a 304 still counts), no asset or
+    digest, or "Not now": it starts the game without a word. A failed download or install shows the reason, then
+    starts the game after 10 s.
+- Version: the Makefile's `VERSION ?= git describe --tags` goes into the updater and the game's log ("MHGU Recomp
+  <version>", runtime/main.c). Only an exact tag (`0.10.4`) updates itself: a build between tags or `unknown` is left
+  alone unless `--update-force` is given. `make dist VERSION=x.y.z` packs the release (tools/dist.py): a .zip for
+  Windows, a .tar.gz for Linux (modes kept). It refuses a VERSION that isn't x.y.z and an updater built with another
+  version.
+- HTTPS: WinHTTP on Windows; on Linux the system's libcurl loaded with dlopen (libcurl.so.4 /
+  libcurl-gnutls.so.4), retried with the usual CA bundle paths when a runtime's libcurl can't find its own. Archives:
+  zlib (static on Windows, libz.so.1 on Linux). The updater needs glibc 2.34 at most and is checked like the game
+  (GLIBC_CHECK). Window: SDL3 with SDL_RenderDebugText, shown only when there is something to say (after 0.7 s of
+  checking, or a question); keyboard, mouse and controller (South: choose, East / Back: not now). Without a display it
+  installs in Auto mode and doesn't ask in Ask mode.
+- Tested 2026-10-28 on throwaway copies:
+  - A 0.9.0 updater installed GitHub's latest release on Windows (zip) and on Linux in WSL (zip on ext4: the
+    programs came out 0755). The installed files were byte-identical to the release, and the player's files were
+    unchanged.
+  - A local fake GitHub served a `make dist` 0.99.0 release (Windows zip, Linux tar.gz). The 0.9.0 updater replaced
+    itself, then reported "up to date" on the next run and removed the backup.
+  - Correctly refused or skipped: wrong digest, no digest, draft, 403, closed port, game running, newer than GitHub,
+    development build. When 0.10.3 was turned into a pre-release mid-test, the updater took 0.10.2.
+  - Arguments with spaces, quotes, trailing backslashes and empty strings reach the game unchanged, and its exit
+    code comes back. A second check got a 304 from GitHub.
+- Not covered: a release that drops a file leaves the old copy behind, and a new `bonus/system` is never installed,
+  since bonus/ belongs to the player.
 
 ## Next steps
 1. Modding tools: decode resident.arc tables (weapon00..14 Base/Level data: record layouts derivable from the game
@@ -496,10 +555,44 @@ plugins verify it) that dispatch.c runs as the unhooked function. forge_hook_cre
 [pc,#-4]; detour` over the entry (plugins verify that too; a hook inside a function: see Damage Numbers below);
 patches over code are re-read for that form (or a `b`),
 anything else in code is logged as not applicable. Forge's own points: sApp::run (main+0xB8692C: resolve singletons,
-forge_onLoad / version check / forge_onInit), the frame update (main+0x3DA8FC: forge_onUpdate(dt)), cSystem ctor /
-dtor (singletons). Not provided: forge_socket_* (an "UNIMPLEMENTED" log line, 0). MHGU_FORGE_LOG=debug|info|warn|error
-(default info). Install = the mod's folder in mods\ (Forge itself is not needed). Log: "[forge] plugin ...",
-"[forge] starting ...", the plugin's own messages as "[forge] [info] ...". Plugins are built -mfloat-abi=softfp, as
+forge_onLoad / version check / forge_onInit; every plugin's DT_INIT and DT_INIT_ARRAY run first, as nn::ro runs them
+at load: an entry that is 0, -1, a Thumb address or outside the module is skipped and logged, DT_INIT 0 is no
+initializer, DT_PREINIT_ARRAY is not run (nn::ro does not for a shared object); while DT_INIT runs the init array holds
+no-ops and its constructors run once after it, so a module whose DT_INIT walks __init_array_start__ (Forge's
+source/crti.c does) does not run them twice. A plugin with no forge_onLoad still gets update and ImGui calls, as in
+Forge), the frame update (main+0x3DA8FC: forge_onUpdate(dt), then the input is read and the overlay drawn, in Forge's
+order), cSystem ctor / dtor (singletons: typed at sApp::run, like Forge's; unlike Forge's, ones made later are typed
+too, a frame after they are made and once their vtable looks finished, on a lookup or forge_singleton_getAllInstances;
+one that never looks finished is given up after 120 frames). forge_socket_*: forwarded to the port's nn::socket (the
+virtual local-play network of net/vsock.c; no internet), failures -1; forge_socket_init / deinit are nn::socket's
+Initialize / Finalize with the plugin's arguments (no-ops there). Plugins built -mtp=soft -ftls-model=initial-exec get
+__aeabi_read_tp (one block per thread: 8-byte TCB, then 4 KiB for each plugin that uses __thread data; a thread's block
+goes back to a free list when the thread ends) and R_ARM_TLS_TPOFF32 is resolved against it. An NRO has no PT_TLS and
+its link-time symbols for .tdata are not in the dynamic table, so the template cannot be found: __thread variables
+start zeroed (a plugin with an initialized one would see zeros; none of the installed plugins uses TLS). A plugin with a
+relocation type this port doesn't know, or a damaged NRO, is skipped with a "[loader]" line (the imports nothing
+provides are named there too; MOD0, the dynamic section, DT_STRTAB / DT_STRSZ, symbol names and DT_HASH are bounds
+checked). Hook creation fails cleanly (no original, a log line) when the trampoline region is full, the tables are
+(1024 function hooks, 1024 trampolines, 1024 kept entry words, 512 interpreted functions), the next function starts
+under two words after an entry hook, or an inside-hook's function cannot run in the interpreter (the two words are
+put back); hooks may target a plugin's own code; Thumb targets are refused (the interpreter is ARM only; Forge hooks
+Thumb code too).
+forge_input_* is read once a frame after the plugins' forge_onUpdate, as Forge does when it draws: isConnected is true
+from the first frame (the game's player 1 pad is always there), the sticks are clamped to -1..1, the buttons include the
+stick-direction bits (16-23) of the game's pad. forge_input_getTouch is the free mouse's left button (not while the
+mouse is captured or Forge's menu is open), as the first touch point in whole 1280x720 screen pixels: the pointer must be
+on the game's picture (fitted in the window by g_render_aspect, centred; outside it: no touch), and the picture's HUD
+canvas (g_ui_anchor_aspect wide at most, centred) spans 0..1279 (beyond it: the edge). Forge's keyboard is 256 HID
+usages.
+Forge's config.ini ([menu] key, font_size; [log] level) is read as iniparser reads it, from one file: the topmost mod's
+romfs nativeNX/forge/config.ini (files are not merged; a long line, a stray line or an unreadable file means the defaults:
+level info, key Insert, 12 px), key = strtol base 0 (decimal, 0x hex, 0 octal), font_size = atof, a level that is not a
+name is error (as in Forge); the default key is Insert (73), not Forge's F9 (66), a choice of the port's author.
+Forge's own messages are written at Forge's levels ("[forge] [INFO] ..."); third_party/cimgui's
+cimgui.h / cimgui.cpp are byte-identical to cimgui commit d298666 (Forge's pin; checked against GitHub, ImGui itself
+being a submodule there is 1.92.8 by its header only).
+Extras beyond Fexty's exported.txt, kept as harmless: forge_log_trace(format, ...) (printed at any level, as [DEBUG]), forge_graphics_isInitialized, forge_graphics_isMenuOpen. MHGU_FORGE_LOG=debug|info|warn|error (default info; overrides the file when it names a level). Install = the mod's folder in mods\ (Forge itself is not needed). Log: "[forge] plugin ...",
+the plugin's own messages as "[forge] [INFO] ..." (Forge's tags). Plugins are built -mfloat-abi=softfp, as
 Forge is: floats in core registers (forge_onUpdate's dt in r0; until 2026-10-23 it went in s0 only).
 
 Forge's ImGui overlay (runtime/overlay.cpp, forge_imgui.c, tools/imgui_thunks.py; 2026-10-23): Forge's "forge"
@@ -511,12 +604,15 @@ thread after forge_onUpdate (plugin code runs there); texture uploads there too,
 draws a copy of the draw lists at the end of the window image's pass (device.c). Input: while open, keyboard / mouse
 / text go to ImGui (host_input.c asks overlay_event first; F-keys and Alt+Enter still work), the controller navigates
 (A activates, B cancels) and the game gets no input. Plugins call cimgui's C API (ig* / Im*, which Forge exports):
-tools/imgui_thunks.py generates runtime/forge_imgui_thunks.inc from cimgui's generator output, 1434 of 1476 functions
+tools/imgui_thunks.py generates runtime/forge_imgui_thunks.inc from cimgui's generator output, 1445 of 1465 functions
 (OVERRIDE ones are hand-written in forge_imgui.c; the rest, listed at its end: draw callbacks, size_t* helpers...): softfp arguments
 converted, guest data pointers as their host address, printf-style ones formatted from the guest's arguments.
 ImGui's objects (ImGuiIO, ImGuiStyle, ImDrawList...) reach plugins as mirrors in guest memory with the 32-bit
 layout (computed per struct, checked against the compiler's with static asserts), synced both ways around each
-call; internal structs are opaque. igNewFrame / igRender / igGetDrawData from a plugin are ignored; igMemAlloc is
+call; internal structs are opaque. Functions taking or returning an ImTextureRef by value (ImDrawList_AddImage /
+AddImageQuad / AddImageRounded, ImTextureData_GetTexRef, igImage...) are provided: its 16 bytes (pointer, pad, ImU64: 8-aligned,
+so r2:r3 + the stack after a first argument, or the hidden result pointer in r0) are rebuilt field by field, _TexData as the
+host ImTextureData behind the plugin's mirror. igNewFrame / igRender / igGetDrawData from a plugin are ignored; igMemAlloc is
 the guest's malloc. Tested with Key Quest Markers r18 (its only ImGui is its colour settings): the menu over the
 title and in a hunt, mouse (headers, tree node, buttons), typing into its hex colour fields, Save & apply (wrote
 key_quest_markers.ini to the save folder), controller navigation; the game unaffected with the menu closed. Callback
@@ -631,3 +727,21 @@ interpreter, logging every instruction that changes the word at addr),
 `MHGU_SHOT_AT=<frames>`, `MHGU_FPS=1`, `MHGU_VK_STATS=1`, `MHGU_VK_VALIDATION=1`, `MHGU_SYNC_SHADERS=1`, `MHGU_PIPE_WAIT_MS=n`,
 `MHGU_NO_PROGRAM_CACHE=1`, `MHGU_SAVE_GLSL=1`.
 `python tools/disasm.py <game dir> <addr | module:symbol> [count] [before]` disassembles guest code.
+
+Plugin bug warnings (runtime/forge.c forge_guest_fault, interp.c gchk / bad_access, platform.h plat_touch_hook): the
+port backs any untouched guest page with zeros, so a plugin's null / garbage pointer that crashes on the console
+(Ryujinx) runs on here. Quiet `[forge] [WARN]` lines name it (MHGU_FORGE_LOG=error silences them):
+`[forge] [WARN] foo.nro: 4-byte read at 0x00000008 (null page) by code at +0x1A4C (pc 03212A4C) r0=0 r1=.. lr=..`.
+Detected, for code in a plugin's image (interpreted): any load / store below 0x10000 (the null page); one at
+0x3C000000-0x43FFFFFF or 0xBC000000-0xC3FFFFFF (a float bit pattern: 0x3F800000 = 1.0f) that no region maps (the game's
+heap counts as mapped); the first touch of any unmapped page, i.e. the fault that makes the port back it (size not
+known, "unmapped page"). Not detected: later accesses in an unmapped 64 KB chunk after its first touch, other
+unmapped addresses that the interpreter checks cannot see (outside the two float ranges) once their chunk is
+backed, atomics (ldrex/strex), bad accesses by the game's own code or by host (HLE) functions, branches to bad
+addresses, and a mapped but wrong pointer. Cost: one compare per interpreted load / store plus three thread-local
+stores per interpreted instruction; recompiled code and mapped accesses are untouched (the fault hook runs only
+when a page is first backed). Limits: once per (plugin, pc); at most 20 lines per plugin, then one "further memory
+warnings ... suppressed" line; 128 sites tracked per plugin. Also WARN, once per site: a code patch that lands in
+recompiled code is ignored (`foo.nro: code patch at main+0x... cannot apply to recompiled code: ignored`), and at
+load `[forge] [WARN] foo.nro: import X is not provided (calls return 0)`. Failed hooks stay ERROR lines
+(`Failed to hook ...`), as Forge's own.

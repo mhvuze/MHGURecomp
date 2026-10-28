@@ -63,6 +63,7 @@ static bool lazy_commit(uint64_t a) {
     return atomic_load(&g_chunk[idx]) == CHUNK_READY;  // (whoever won it backed the page: resume)
 }
 
+void (*plat_touch_hook)(uint64_t guest_addr, int write);
 static void fault_handler(int sig, siginfo_t *si, void *uc);
 
 bool plat_reserve_guest(uint64_t base, uint64_t size) {
@@ -169,6 +170,16 @@ void plat_init(void) {
         static const char brew_icd[] = "/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json";
         if (access(brew_icd, R_OK) == 0) setenv("VK_ADD_DRIVER_FILES", brew_icd, 0);
     }
+}
+
+unsigned long plat_process_id(void) { return (unsigned long)getpid(); }
+bool plat_wait_process(unsigned long pid) {
+    struct timespec pause = {0, 10000000};
+    for (int i = 0; i < 3000; ++i) {
+        if (kill((pid_t)pid, 0) < 0) return errno == ESRCH;
+        nanosleep(&pause, NULL);
+    }
+    return false;
 }
 
 bool plat_exe_path(char *buf, size_t size) {
@@ -307,7 +318,14 @@ static const char *sig_name(int sig) {
 static void fault_handler(int sig, siginfo_t *si, void *uc) {
     ucontext_t *ctx = (ucontext_t *)uc;
     uint64_t fa = si && si->si_addr ? (uint64_t)(uintptr_t)si->si_addr : 0;
-    if ((sig == SIGSEGV || sig == SIGBUS) && lazy_commit(fa)) return;  // (a guest page first touched: back it, resume)
+    if ((sig == SIGSEGV || sig == SIGBUS) && lazy_commit(fa)) {  // (a guest page first touched: back it, resume)
+#if defined(__arm64__)
+        if (plat_touch_hook) plat_touch_hook(fa - g_lo, (ctx->uc_mcontext->__es.__esr >> 6) & 1);  // (ESR WnR)
+#else
+        if (plat_touch_hook) plat_touch_hook(fa - g_lo, (ctx->uc_mcontext->__es.__err & 2) != 0);
+#endif
+        return;
+    }
 #if defined(__arm64__)
     uint64_t pc = (uint64_t)ctx->uc_mcontext->__ss.__pc, lr = (uint64_t)ctx->uc_mcontext->__ss.__lr;
 #else
