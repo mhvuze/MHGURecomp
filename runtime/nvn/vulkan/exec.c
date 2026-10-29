@@ -2570,6 +2570,10 @@ static void plist_load(void) {
         if (bs > s) s = bs;
         if (s) s[1] = 0; else exe[0] = 0;
         snprintf(path, sizeof path, "%spipelines.list", exe);
+#ifdef __APPLE__
+        // (a macOS app carries it in Contents/Resources, beside Contents/MacOS: tools/make_app.py)
+        if (plat_in_app_bundle()) snprintf(path, sizeof path, "%s../Resources/pipelines.list", exe);
+#endif
     }
     FILE *f = fopen(path, "rb");
     if (!f) return;
