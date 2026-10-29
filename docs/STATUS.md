@@ -170,6 +170,55 @@ APIs are HLE'd at the function level, so no Switch service (ldn:u, bsd:u) is inv
   on a mutex it owned - forever. Single player rarely times out (a thread or two hung unnoticed); the network
   threads do it constantly. MHGU_DUMP_THREADS dumps now show mutex owners and a heuristic list of callers.
 
+## Internet hubs through a hub server (2026-10-29, branch feat/ldn-server)
+
+Local Play over the internet without port forwarding, for friends (matchmaking key) and strangers (public), through
+our own lobby / relay server (server/, Go, stdlib only; server/README.md: build, run, self-host, Docker, systemd).
+Plan and security notes: docs/research/internet-hubs.md.
+- ini [Multiplayer] Server (empty: LDN_DEFAULT_SERVER in config.h, the public server below;
+  Off: none; host[:port], default port 39510) and Key (matchmaking key; empty: public). Both in the settings menu
+  (Multiplayer page) and live (config_live_ldn; until 2026-10-29 the menu saved them but the game kept the start-up
+  values): Scan / Join read them each time, a hub at each (re)connection to the server. MHGU_LDN_SERVER /
+  MHGU_LDN_KEY env overrides for tests.
+- What the player sees of the server (ldn.c hub_report): a notice at the top of the screen for 7 s (overlay_notice,
+  drawn on ImGui's foreground draw list, so it shows with or without a menu open and takes no input) when the server
+  is not found / unreachable / lost / busy / another version / refuses: hosting ("your hub is not listed online",
+  once per failure, and "listed online again" when it comes back), searching ("only hubs on your local network",
+  every search, but not twice within 10 s), joining (every failure; "the host did not answer" too). Texts are in
+  settings_locale.h (UI_TEXT in ldn.c; tests/test_settings_locale.py checks them). The Multiplayer page has a
+  "Check hub server" row: LIST with the server / key being edited (ldn_hub_check, a thread), showing "Online, N ms,
+  N hub(s)" or the failure; before a check it shows the last state the game's own searches / hub saw for that server.
+- Key -> room: first 16 bytes of SHA-256("MHGURecomp matchmaking key:" + key, spaces around it trimmed), all zero
+  without a key (updater/sha256.c is linked into the game for it). The server lists a hub only for requests with the
+  same room and link PROTO_VERSION; JOIN with another room answers "not found".
+- Host (ldn.c lobby_thread): Create Hub also lists the hub (HOST with its NetworkInfo; UPDATE on every
+  push_info_locked change; PING every 15 s; reconnects after 10 / 30 s). For each INCOMING ticket it opens a second
+  connection (ATTACH), and the spliced socket goes to the same station_thread as a LAN connection. If the ini Port is
+  taken, hosting with a hub server falls back to a system-chosen port (online only).
+- Station: Scan asks the server (in a thread while the LAN is searched); a hub found both ways is joined directly.
+  Connect to a listed hub = JOIN, then the usual F_HELLO handshake over the spliced connection.
+- UDP through the server: datagrams prefixed "MHGR" + pair id + own secret (Link relay_pair / relay_secret); the
+  server passes the rest to the other end. The host sends a bare prefix every second until the station's hellos come
+  through, so the server knows where its end is. TCP fallback as before.
+- Hardening on the way: every NetworkInfo from the network goes through info_sane (counts / sizes in range, strings
+  terminated, node ids = index) before the game sees it; a WELCOME's node number is range-checked (was an out-of-
+  bounds read); F_REFUSE results other than nn::ldn's become ConnectionRejected.
+- Tested on one PC (server on 127.0.0.1, run/ hosts on port 39500, run2/ on 39600 so LAN search can't find it, key
+  "friends"): hub listed, found by Search Hubs only through the server, joined (game packets by UDP through the
+  relay), both see each other in the Hub, the listing follows the player count (1/4 -> 2/4 -> 1/4), a killed station
+  is seen leaving, Disconnect delists the hub, other keys / no key see nothing. Server: `go test ./...` (keys,
+  versions, splice, UDP relay incl. a forged secret, rate and per-IP limits, a host that never attaches). Not tested
+  yet: two PCs / real NAT, a hunt through the relay, more than 2 players. Note the joiner needs the host's hub type
+  unlocked (Hunters' Pub = G Rank).
+- Public server (2026-10-29): morerokk-mhgurecomp-ldnserver.duckdns.org (DuckDNS name -> the VM's public IP), an Oracle
+  Cloud Always Free VM (AMD micro, Oracle Linux 9). /usr/local/bin/mhgurecomp-hubserver (GOOS=linux GOARCH=amd64
+  build), systemd unit mhgurecomp-hubserver (-v, DynamicUser, sandboxed), firewalld + VCN security list open 39510
+  TCP / UDP. Log: `sudo journalctl -u mhgurecomp-hubserver`. Update: copy the new binary in, restorecon, restart.
+  Checked from outside: list, join, splice, UDP relay (scratchpad hubcheck.py <host>), ~4 MB RAM.
+- Two-instance test: scratchpad mp_start.ps1 (-port / -server / -key), hub_route.ps1 (loads the save; -mode host
+  stops at Create Hub settings: A on "Hunters Hub", LEFT to "Wycademy Hub", A, X; -mode join opens Search Hubs),
+  hublist.py <key> (what the server lists). The run\ save starts on the airship: ZL = Multiplayer menu.
+
 ## Event camera pans skippable with A (2026-10-21)
 
 Entering a village / hub area when something is new plays an event (rScheduler, arc/ev/*.arc, path
@@ -351,6 +400,23 @@ stage from; the Arena's b_m09em062_00 spawn), MHGU_QUICKHUNT=404, then the hunte
 
 Buff icons and the frame rate (2026-10-28): fixed. Reported: with two or more buffs the icon beside a name on the HUD's status plates (yours, the other hunters', the Palicoes') takes turns far too fast at 240 fps. The plates (cUIOStatusPlate / cUIOStatusPlateGuests, update 0x834314) call 0x834d00 once per update for each of their two icon slots ({index, countdown, shown} at plate +0xf0 / +0xfc; tables of 54 and 36 icons at image 0x1839250 / 0x18395b0, tested against the player's buff flags +0x2840..+0x2864, rebuilt from the buff timers each update at 0x49f0xx): the countdown drops by 1 per update and is reloaded with 20, 0.67 s at 30 fps, 0.08 s at 240. Fix (runtime/hle/buffcycle.c, tools/gen.py PATCHES): the decrement (0x834d20) takes step / 2 updates (at most 1) in 1/65536 units and the reload (0x834ef4) is 20 of those. Checked at 240 fps (test save, quest 101, two buffs from their timers: player +0x287c and +0x2880 poked to 3000): the two icons change every 0.667 s, 12 times in 8 s.
 
+KO (stun) and the frame rate (2026-10-29): not found yet. Reported: KO from head hits with blunt weapons much harder at
+high frame rates (a 240 fps player: Alatreon hammer solo, horns broken early, 0-1 KOs). Suspected status decay counted
+per update: it isn't. Status data (dt_tune, rEnemyDtTune; monster +0x75ec -> the resource, entry pointers at +0x98:
+poison, sleep, paralysis, stun, exhaust, mount, blast, ...): per status s16 initial threshold, decay interval (60 fps
+frames), decay amount, duration, increase per KO, max (poison two more). The status block *(monster + 0x1428): stun
+buildup +0x5d76, threshold +0x5d78, decay timer f32 +0x5d7c, KO count +0x5d80, stunned bit 0x10 of +0x5e08, time left
+f32 +0x5e0c. A head hit adds KO x part multiplier / 100 (at least 1) to +0x4d2 (0x29db54); the monster's update applies
+it (0x29a34c -> 0x2a2e18: buildup += it, decay timer reloaded; at the threshold the KO starts, 0x2a2f0c, unless one of
+the u8 counters +0x3a2..+0x3a4 (set to 2 by 0x2c0410 / 0x2c0438 / 0x2c044c, -1 per update at 0x2c957c) or vtable
++0x39c (overridden by 3 monsters: 0x110d8f4, 0x11c266c, 0x11e3298) holds it back at threshold - 1); after a KO the
+threshold rises (0x2a2f80). Decay (0x2a398c, all statuses) and the KO's duration (0x2c9254) count down by the
+monster's step (+0x1c, via 0x272128 / 0x73aa84). Measured (Arena Volvidon, buildup poked to 90): 5 every 10 s at 30 and
+at 120 fps; a KO (pending KO poked) lasts 10.0 s at 30 and 60 fps. Next: MHGU_KOTRACE=1 (runtime/hle/kotrace.c) logs
+every hit's KO, the buildup / threshold, KOs held back at the threshold, KO start / end and decay, for a player's
+30 vs 60 fps hammer session. Debug aid added: the control file's "interpread <lo>:<hi> <file of entries>" (interp.c:
+logs the instructions of the listed functions and their callees that read a guest range).
+
 Two-button inputs and the frame rate (2026-10-28): fixed. Reported: the Hunting Horn's X+A (and the Lance's R+X+A)
 need both buttons almost together at high frame rates. The player's input update (0x47ca28, every weapon; called
 from the player update at 0x4a7dec) holds a new attack-button press (the key config's mask from 0x85f93c, | 0x1b0)
@@ -466,6 +532,23 @@ the scene it copies are complete (also covers the "half black" case above). Same
 photo requested" line, 2 waits (2 ms) at the clear, 0 skips, photo right. The reward screen's own draw of the buffer
 still skips its first frame (redrawn every frame: unseen).
 
+Shipped pipeline list (2026-10-29). Surfaces black for a moment on entering an area the first time, with the prewarm
+done: not programs missing but pipelines (a program with the draw's blend / depth / vertex layout / target formats:
+Vulkan 1.2 bakes all of it in; NVN has it as state) and dormant programs loading, past the 6 ms budget. The game
+never lists its combinations, so they are recorded: extras/pipelines.list (make copies it beside the executable,
+dist ships it) holds the pipelines recorded while playing the common areas (first: the user's town and three hunts,
+904). A record names its program by the game's shader code hashes (code_hash) and shader keys, not by a translated
+program, so it outlives translator changes (unlike pipelines.bin, tied to SHADER_ID) and other GPUs: DEPTH24_STENCIL8
+and vertex formats are made again for the GPU at load (D32S8 on AMD; widened vertex formats). Records whose program is
+in programs.bin are attached at start-up like pipelines.bin's; the others when the prewarm meets their shader code
+(plist_seen on the translate thread, plist_drain on the render thread makes the variant and its pipelines). The
+header checks sizeof ShaderKey / PipeKey / ListRec: a change there needs a new recording. Matches only the settings
+it was recorded with for MSAA (Off) and anything else in PipeKey. Measured (R9, empty cache\, quick start into quest
+101 with the user's save, skipped draws over the same 40 s): 1398 without, 163 with (the quest area's load 1225 -> 51;
+what is left is the town's first frames while the prewarm still runs); the next start 6. Recording more:
+MHGU_PIPELIST_EXPORT=<file> writes pipelines.bin's records plus the loaded list's at the first draw, then copy it
+over extras/pipelines.list (MHGU_PIPELIST=<file>: read another list; MHGU_NO_PIPELIST=1: none).
+
 ## Updater (2026-10-28)
 
 `mhgurecomp-updater(.exe)` (updater/, built by `make` beside the game) is a separate program that is started instead
@@ -540,8 +623,11 @@ affected (its own sleep). Since the Linux port began; a 4-core machine shows it 
    memory if some effect needs it.
 3. A README with build instructions; Linux platform layer (runtime/platform/linux.c). It must also give
    plat_user_dir a home for save data: $XDG_DATA_HOME/MHGURecomp, else ~/.local/share/MHGURecomp (see "Save data").
-4. Internet hubs without port forwarding (friends by code, public list) through our own relay / lobby server, and a
-   security audit of the network code before strangers can join: plan in docs/research/internet-hubs.md.
+4. Internet hubs: the hub server and client exist, and the public server runs (see "Internet hubs through a hub
+   server"). Left: test across two PCs and real NATs, a hunt, 3-4 players; measure the
+   relay's traffic per player; direct UDP by hole punching (relay as fallback); the rest of the security audit
+   (vsock.c, emsync.c, hpscale / villagehub aux messages, IPC / fs boundary) before public hubs are advertised:
+   docs/research/internet-hubs.md.
 5. Android build (arm64, controller only, no touch controls): plan in docs/research/android.md.
 6. Draw distance ([Graphics] DrawDistance, 2026-10-28): town NPCs (uLobbyNpc, the 15 people in Bherna) fade in
    within a distance and out beyond it (uLobbyNpc 0x8c2d9c: squared distance to the object at a global +0x54 against

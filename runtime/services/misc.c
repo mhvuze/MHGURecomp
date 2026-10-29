@@ -78,10 +78,15 @@ static void pctl_service(Service *s, IpcReq *req, IpcResp *resp) {
     switch (req->cmd) {
     case 1031: case 1035: case 1018: OUT(uint8_t, 0) = 0; resp_size(resp, 1); break;  // restrictions off
     case 1032: OUT(uint32_t, 0) = 0; resp_size(resp, 4); break;
-    // CheckFreeCommunicationPermission: allowed. The game asks every frame on some screens (~10,000 log lines in a
-    // few minutes), so it is answered here as the default did, without the log line.
-    case 1001: resp_size(resp, 0x10); break;
-    default: LOG("[pctl] IParentalControlService cmd %u (ok)\n", req->cmd); resp_size(resp, 0x10);
+    default: {
+        // (logged once per command: the game asks 1001, CheckFreeCommunicationPermission, many times a second online)
+        static uint8_t seen[4096 / 8];
+        if (req->cmd >= 4096 || !(seen[req->cmd / 8] & (1u << (req->cmd % 8)))) {
+            if (req->cmd < 4096) seen[req->cmd / 8] |= (uint8_t)(1u << (req->cmd % 8));
+            LOG("[pctl] IParentalControlService cmd %u (ok; logged once)\n", req->cmd);
+        }
+        resp_size(resp, 0x10);
+    }
     }
 }
 

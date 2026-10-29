@@ -36,7 +36,7 @@ RT_SRC   := $(wildcard runtime/*.c) $(wildcard runtime/hle/*.c) $(wildcard runti
             runtime/platform/$(PLATFORM).c
 # (simd_int.c / neon.c, helpers of the recompiled code, live in the executable: the game code library imports them,
 # and runtime/interp.c uses them too)
-RT_HDRS  := $(wildcard runtime/*.h) $(wildcard runtime/platform/*.h) $(wildcard runtime/nvn/*.h) $(wildcard runtime/nvn/*/*.h)
+RT_HDRS  := $(wildcard runtime/*.h) $(wildcard runtime/net/*.h) $(wildcard runtime/platform/*.h) $(wildcard runtime/nvn/*.h) $(wildcard runtime/nvn/*/*.h)
 
 # FFmpeg (the game's movies, runtime/hle/movie.c): by default a small static build of a pinned FFmpeg release, made
 # here from its source (downloaded once to third_party/ffmpeg/, checked against FFMPEG_SHA256) with only what the movies
@@ -135,7 +135,8 @@ GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | sha256sum | cu
 VERSION ?= $(shell git describe --tags 2>/dev/null || echo unknown)
 
 RT_OBJ   = $(patsubst runtime/%.c,$(O)/rt/%.o,$(RT_SRC)) $(patsubst runtime/%.m,$(O)/rt/%.o,$(RT_OBJC)) $(RT_CXX) \
-           $(O)/rt/overlay.o $(O)/rt/settings_panel.o $(IMGUI_OBJ)
+           $(O)/rt/overlay.o $(O)/rt/settings_panel.o $(IMGUI_OBJ) $(O)/updater/sha256.o
+# (updater/sha256.c: runtime/net/ldn.c hashes the matchmaking key with it)
 # Dear ImGui with cimgui's C API (third_party/cimgui: Forge plugins' ImGui, runtime/forge_imgui.c, overlay.cpp)
 IMGUI    := third_party/cimgui
 IMGUI_SRC := $(IMGUI)/cimgui.cpp $(addprefix $(IMGUI)/imgui/,imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_demo.cpp)
@@ -187,7 +188,7 @@ else
 RT_CXX   := $(O)/rt/nvn/vulkan/vma.o $(FSR_OBJ)
 endif
 
-all: $(EXE) $(if $(GEN_SRC),$(GAMELIB)) $(UPDATER) $(if $(filter windows,$(PLATFORM)),bundle) data licenses
+all: $(EXE) $(if $(GEN_SRC),$(GAMELIB)) $(UPDATER) $(if $(filter windows,$(PLATFORM)),bundle) data licenses pipelist
 
 # Host-only INI/settings regression test: no game dump or generated code required.
 .PHONY: test-settings
@@ -241,7 +242,7 @@ $(O)/rt/overlay.o: runtime/overlay.cpp runtime/overlay.h runtime/forge.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(IMGUIFLAGS) $(if $(filter 1,$(NULL_GPU)),-DMHGU_NULL_BACKEND) -Wall -Iruntime $(OSFLAGS) -c $< -o $@
 
-$(O)/rt/settings_panel.o: runtime/settings_panel.cpp runtime/settings_panel.h runtime/modorder.h runtime/config.h runtime/settings_locale.h runtime/settings_icons.h runtime/app_actions.h runtime/overlay.h
+$(O)/rt/settings_panel.o: runtime/settings_panel.cpp runtime/settings_panel.h runtime/modorder.h runtime/config.h runtime/settings_locale.h runtime/settings_icons.h runtime/app_actions.h runtime/overlay.h runtime/net/net.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(IMGUIFLAGS) -Wall -Iruntime $(OSFLAGS) -c $< -o $@
 
@@ -314,6 +315,13 @@ endif
 # THIRD_PARTY_NOTICES (code compiled in: LAS Recomp, Dear ImGui, cimgui, VulkanMemoryAllocator), FFmpeg's LGPL (in the
 # executable), and on Windows those of the MSYS2 packages behind the DLLs bundled and the libraries linked in
 # (bundle: tools/bundle_dlls.py, which lists them all with their versions and sources in licenses/README.txt).
+# The pipelines recorded in the common areas (extras/pipelines.list: the game's shader code hashes and render state,
+# nothing of the game itself), built in the background on a first run: runtime/nvn/vulkan/exec.c "pipeline list"
+pipelist: $(B)/pipelines.list
+$(B)/pipelines.list: extras/pipelines.list
+	@mkdir -p $(dir $@)
+	cp $< $@
+
 licenses: $(B)/licenses/LICENSE.txt $(B)/licenses/THIRD_PARTY_NOTICES.txt $(if $(AV_DEPS),$(B)/licenses/FFmpeg.txt)
 $(B)/licenses/%.txt: %
 	@mkdir -p $(dir $@)
@@ -412,7 +420,7 @@ dist: all
 	  { echo "dist: '$(VERSION)' is not a release version: make dist VERSION=<the release's tag, e.g. 0.10.4>"; exit 1; }
 	$(PY) tools/dist.py $(B) $(DIST) $(PLATFORM) $(VERSION) $(if $(BONUS),--bonus "$(BONUS)")
 
-.PHONY: all app macos-deps release gen test-lift runtime-objs clean bundle data licenses dist FORCE
+.PHONY: all app macos-deps release gen test-lift runtime-objs clean bundle data licenses pipelist dist FORCE
 
 # Exercise real ImGui navigation without a game dump or graphics device.
 .PHONY: test-settings-panel
