@@ -144,6 +144,9 @@ int main(int argc, char **argv) {
     Config fsr_config=config_editable();
     assert(config_defaults().sync_small_monsters==0);
     assert(config_defaults().shader_prewarm==1);
+    assert(config_defaults().draw_distance==1.0f);
+    assert(config_defaults().mute_in_background==0);
+    assert(config_defaults().combo_window==COMBO_LENIENT);
     fsr_config.fsr=1;fsr_config.fsr_upscaler=FSR_UP_4;fsr_config.fsr_quality=FSR_BALANCED;
     fsr_config.fsr_sharpness=.65f;fsr_config.fsr_objmotion=0;fsr_config.fsr_reactive=.35f;fsr_config.fsr_animsurf=0;
     fsr_config.msaa=8;fsr_config.fxaa=1;

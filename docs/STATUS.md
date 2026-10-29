@@ -351,6 +351,20 @@ stage from; the Arena's b_m09em062_00 spawn), MHGU_QUICKHUNT=404, then the hunte
 
 Buff icons and the frame rate (2026-10-28): fixed. Reported: with two or more buffs the icon beside a name on the HUD's status plates (yours, the other hunters', the Palicoes') takes turns far too fast at 240 fps. The plates (cUIOStatusPlate / cUIOStatusPlateGuests, update 0x834314) call 0x834d00 once per update for each of their two icon slots ({index, countdown, shown} at plate +0xf0 / +0xfc; tables of 54 and 36 icons at image 0x1839250 / 0x18395b0, tested against the player's buff flags +0x2840..+0x2864, rebuilt from the buff timers each update at 0x49f0xx): the countdown drops by 1 per update and is reloaded with 20, 0.67 s at 30 fps, 0.08 s at 240. Fix (runtime/hle/buffcycle.c, tools/gen.py PATCHES): the decrement (0x834d20) takes step / 2 updates (at most 1) in 1/65536 units and the reload (0x834ef4) is 20 of those. Checked at 240 fps (test save, quest 101, two buffs from their timers: player +0x287c and +0x2880 poked to 3000): the two icons change every 0.667 s, 12 times in 8 s.
 
+Two-button inputs and the frame rate (2026-10-28): fixed. Reported: the Hunting Horn's X+A (and the Lance's R+X+A)
+need both buttons almost together at high frame rates. The player's input update (0x47ca28, every weapon; called
+from the player update at 0x4a7dec) holds a new attack-button press (the key config's mask from 0x85f93c, | 0x1b0)
+to see whether another joins it: bit 0 of the player's input bits +0x1444 and a countdown +0x1448 = 2.0
+(0x47d558), less 1.0 each update (0x47ca84 `vmov.f32 s2, #-1.0`, 0x47ca90 `vadd`); at 0 the press counts alone.
+Measured (MHGU_LOG_MOVES, quest 101 with the user's HH, X then A d frames later): at 30 fps X+A (0010:006) for
+d <= 2, X alone (0010:000) 2 frames after the press otherwise; at 120 fps the same 2 frames (17 ms). The command
+tables (rPlBaseCmd: act_st / act_no / act_param, cmd_type, cmd_param0..3; cmd_type 8 = key param0 just pressed)
+read logical keys the weapon's key function (0x1360058 and its siblings, one per weapon) sets from +0x1444: held
++0x1414, pressed +0x1424 (0x485e2c / 0x485e78 test, 0x485de4 / 0x485e54 set). Fix (runtime/hle/combowin.c, tools/gen.py
+PATCHES): the constant is -step / 2 updates (at most 1). Checked: at 120 fps X+A for d <= 8 and X alone 8 frames
+(67 ms) after the press; 30 fps unchanged. A lone attack button is read 67 ms after the press at any frame rate,
+as on the Switch (it was 17 ms at 120 fps).
+
 ## Fidelity audit (2026-10-20)
 
 Silent-bug sweep after the shimmer and shadow fixes (the two classes found: a driver needing explicit barriers, and a
@@ -495,6 +509,16 @@ itself has no networking for this and never changes: `mhgurecomp` always just st
 - Not covered: a release that drops a file leaves the old copy behind, and a new `bonus/system` is never installed,
   since bonus/ belongs to the player.
 
+## Fixed (2026-10-28): Linux sleeps were busy loops
+
+Reported (Fedora, Intel N100, 4 cores): all four cores saturated, 40-50% of it kernel time, not smooth at any render
+size. plat_sleep_until_ns (runtime/platform/linux.c) gave clock_nanosleep(TIMER_ABSTIME) the time left as if it were
+the absolute deadline: long past, so it returned at once and every sleep spun on syscalls until its deadline. Every
+sleeping thread did this: the 60 Hz vblank timer (hle/vi.c), svcSleepThread (every game thread that sleeps), Local
+Play. Fix: sleep until 200 us before the deadline, then yield as designed. Measured (WSL, 200 sleeps of 5 ms): before
+60% of a core (0.5 s sys a second), after 2%, still on time (1 us late on average, 42 us at worst). Windows was not
+affected (its own sleep). Since the Linux port began; a 4-core machine shows it the most.
+
 ## Next steps
 1. Modding tools: decode resident.arc tables (weapon00..14 Base/Level data: record layouts derivable from the game
    code that reads them), monster files per `arc/enemy/emXXX_YY.arc` (`attackdata`, `bodydata`, `dtbase`,
@@ -507,11 +531,21 @@ itself has no networking for this and never changes: `mhgurecomp` always just st
 4. Internet hubs without port forwarding (friends by code, public list) through our own relay / lobby server, and a
    security audit of the network code before strangers can join: plan in docs/research/internet-hubs.md.
 5. Android build (arm64, controller only, no touch controls): plan in docs/research/android.md.
-6. Configurable draw distance (ini). In Bherna Village NPCs vanish a few steps away, as on the Switch; in hunts
-   monsters show across the zone (they must), so start with the towns. Find what culls them: an NPC / object
-   distance or LOD constant (code, or a table in resident.arc / the stage's arcs) read per frame - fnnew around
-   walking away from an NPC, then the compare against the distance. Also check gathering spots and other map
-   objects (do they pop in late?). Watch the cost: more NPCs drawn, and the game may cap how many it updates.
+6. Draw distance ([Graphics] DrawDistance, 2026-10-28): town NPCs (uLobbyNpc, the 15 people in Bherna) fade in
+   within a distance and out beyond it (uLobbyNpc 0x8c2d9c: squared distance to the object at a global +0x54 against
+   the table at 0x8c2ef0, 2500^2, or 1800^2 with flag 0x40 of +0x186a; fade value +0x1894, copied to the model's
+   alpha +0x158). gen.py PATCHES at the load 0x8c2e34 -> config.c npc_fade_dist2: the factor squared times it, 0 =
+   no limit; live (settings menu, Graphics & Audio page). Hunts are untouched (monsters are not uLobbyNpc). Found
+   by diffing NPC objects at five player positions (+0x158 / +0x1894 1 near, 0 far). Checked in game (R9, 960x540,
+   Bherna arrival view): at 2 and 0 the people far up the path are drawn, at 1 not (as the game). Cost: uncapped
+   (VSync Off, FPS 240) ~119 fps at 1, ~113 at 0 (+0.4 ms); VSync Off at 60: a steady 60 at 0. With VSync On it
+   fell to 33-45 fps: this driver has no mailbox, so VSync On is FIFO, and the game paces to vi.c's own 60 Hz timer,
+   not the display's, so a frame that ends a little late waits a whole vblank (a pacing problem any heavier scene
+   hits, not the NPCs' cost). Not looked at: gathering spots and other map objects, Hub NPC classes.
+   Speech bubbles (reported 2026-10-28: the "new dialogue" bubble over an NPC still used the game's distance): the
+   bubble has its own copy of the check (0x8c11f8, table at 0x8c1328, then 0x938530 puts the bubble above the head);
+   its load 0x8c127c gets the same npc_fade_dist2. Checked (the user's save, MHGU_QUICKHUNT=town, Bherna arrival
+   view): 1 bubble at 1 (as the game), 5 at 0, each on its NPC.
 7. A settings launcher for players who don't edit ini files: every [section] / key of runtime/config.c (it already
    knows the names, defaults, ranges and comments) in a window, saved to mhgurecomp.ini. Cheapest: inside the exe
    with the ImGui the port already ships (a `--settings` switch, or a "Settings" shortcut), so no second program or
@@ -552,6 +586,14 @@ itself has no networking for this and never changes: `mhgurecomp` always just st
    names, several keys per button, mouse buttons too), plus the left stick's four directions and the walk key. Today
    the layout is fixed: key_buttons in runtime/host_input.c, WASD / Shift handled beside it. The current layout stays
    the default, so existing ini files keep working; the settings launcher (item 7) can show it later.
+11. Button-combo windows at high frame rates: fixed (2026-10-28), see "Two-button inputs and the frame rate" above.
+   Hunter Arts on R+A+B (another control type, 2026-10-29): tested by the user at a high frame rate, works (R and A
+   held then B, or all three at once). The countdown starts on A, B, X, Y and R / ZR (pad bits A 0x100, B 0x80,
+   X 0x20, Y 0x10, R 0x40, ZL 0x200, ZR 0x800 at player +0x13f4 held / +0x13f8 new) and keeps each press of the
+   window (+0x1444 bits 13+, 0x47d574), so the buttons need not be held together. Left: a check elsewhere that
+   wants them held at the same moment would still miss a quick finger roll at very high frame rates (30 Hz polling
+   hid that); a 30 Hz input polling option would cover it at up to 33 ms of input latency - not needed so far.
+   Still to check: other weapons' timed inputs (Charge Blade, Insect Glaive, Styles') for other per-update windows.
 ## Build / run
 
 MSYS2 UCRT64 on PATH (`C:\msys64\ucrt64\bin;C:\msys64\usr\bin`):
@@ -748,7 +790,9 @@ version (building the regions from the RomFS) is possible once the flag bits and
 
 Controls: see `runtime/host_input.c` (keyboard and mouse: WASD, mouse look (relative mode after a click, Esc releases; the mouse speed smoothed
 over 25 ms as the right stick tilt, offset past the camera's round ~39% stick dead zone; ini [Mouse] MouseSensitivity), clicks = X / A, Space / R = B / Y, Tab / T = ZL / ZR,
-arrows = d-pad, Ctrl / Alt = stick clicks, Enter = Plus; SDL gamepads, face
+arrows = d-pad, Ctrl / Alt = stick clicks, Enter = Plus; SDL gamepads (all open, the one a button was last pressed on is
+read: a Steam Deck with a controller plugged in has two, and taking the first one SDL listed left the player's pad dead;
+MHGU_PAD=<name part or vid:pid> keeps only that one), face
 buttons by position (Switch layout) or label: ini FaceButtons; the controller also works with the window in the
 background, ini BackgroundInput = On (default; SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, set before SDL's gamepad
 subsystem starts, runtime/ui.c; MHGU_BACKGROUND_INPUT=0|1), keyboard / mouse only with the focus;
@@ -757,6 +801,12 @@ resolution, anti-aliasing and frame rate: mhgurecomp.ini (delete it to get the d
 Game folder: where the settings, caches, mods\, bonus\, shots\ and log.txt are: the exe's folder when started on its
 own (build\ itself holds only what the build makes; compiler files go to obj\). MHGU_HOME=<folder> moves them there
 (run-game.bat: run\, test scripts: testsave\home); the game files are still read from data\ beside the exe.
+
+When the game quits by itself (2026-10-28, a Fedora report: "ExitProcess" right after GetService acc:u0, no
+reason): the SDK's failed checks (every AbortImpl variant ends in nn::diag::detail::VAbortImpl, 0x244a0d0), abort()
+and exit() are HLE_SDK in runtime/hle/abort.c and log the condition, function, file and line, the Result (as
+2xxx-yyyy) and the message, then the game's lr and callers (kernel_log_guest_stack, the same heuristic as
+MHGU_DUMP_THREADS); svcExitProcess logs its caller too. Look the callers up with tools/disasm.py.
 
 Debug env: `MHGU_TRACE_SVC`, `MHGU_TRACE_IPC`, `MHGU_LOG_FILES`, `MHGU_FNPROF` (hot functions every 5 s),
 `MHGU_FNTRACE=lo-hi[:n]` (calls into a guest address range, with caller and thread), `MHGU_DUMP_THREADS=<s>`
@@ -768,7 +818,8 @@ controller, frames = presented frames; e.g. `300:A:10`), `MHGU_NAME` (answers ev
 `fnnew lo hi [learn ms]` = log only the first call of each function in [lo, hi) not seen while learning, to find what an
 event runs; `peek` / `poke` / `memsave` / `find` for guest memory), `MHGU_QUICKHUNT=<quest number>` (from start-up
 straight into that quest: A through the menus to the save's town, then the quest is ordered and departed on;
-runtime/hle/quickhunt.c has how the game departs), `MHGU_LOG_MOVES=1` (the player's actions and command table
+runtime/hle/quickhunt.c has how the game departs; `MHGU_QUICKHUNT=town` stops in the town), `vpad` (control file:
+attach an SDL virtual controller; `vpad <n> <button> <0|1>` presses its button), `MHGU_LOG_MOVES=1` (the player's actions and command table
 changes, runtime/hle/movelog.c), `MHGU_EMTRACE=1/2/3` (large monster actions with their real-time length, height and
 distance; 2: the position every update; 3: the monster object saved on 4 updates once a forced action is 200 up;
 MHGU_CONTROL's `emact <group> <index>` starts an action, `emsweep <group> <first> <last>` each in turn:

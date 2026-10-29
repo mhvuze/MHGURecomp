@@ -12,9 +12,9 @@ Status: fully playable, but there may be some bugs. I've played a dozen hunts wi
 ## What it adds over the Switch version
 
 - Graphics settings (resolution, MSAA, FXAA, Supersampling, VSync)
-- Any screen shape from 16:10 to ultrawide (21:9, 32:9 and wider), with the HUD unstretched: centered or spread to
-  the screen's sides
+- Any widescreen aspect ratio (16:10, 16:9 and and anything wider than that)
 - Frame rate cap anywhere between 30-240 fps
+    - Bugfixes for speed-related issues that emulators normally have when using higher FPS mods/codes
 - Supports almost every controller under the sun
 - Experimental KB+M controls
 - Optional: small monsters are properly synced between players in multiplayer
@@ -23,12 +23,14 @@ Status: fully playable, but there may be some bugs. I've played a dozen hunts wi
 - Optional: village quests are playable in multiplayer (press L/R at the quest counter), with appropriately re-scaled monster HP
 - Mod support. The vast majority of mods work by dropping them into the `mods` folder, including Forge mods. (see [Mods](#mods))
 - Cheat codes in the same format as Ryujinx and Atmosphère, in the `cheats` folder (see [Cheats](#cheats))
+- Ingame PC Settings menu overlay (F1 to open, will be replaced with a real settings menu in the future)
 
 ## Requirements
 
 - OS: Windows 10/11 64-bit, Linux, or macOS 13 or newer on an Apple Silicon Mac (see [macOS](#macos-apple-silicon))
 - CPU: Any CPU from 2014 or newer (needs AVX2 support)
 - GPU: Any GPU from 2016 or newer (needs Vulkan 1.2 support), and at least 1GB of VRAM
+- RAM: 4GB
 - The game files for Monster Hunter Generations Ultimate, version 1.4.0. You can extract these from your Switch or Ryujinx with patches pre-applied.
     - (Title ID `0100770008DD8000`, the `main` executable's build ID starts with `FB08F1D20FD1204F`)
 
@@ -66,7 +68,7 @@ If the files are missing or the wrong version, a message box says so.
 
 ### Staying up to date
 
-Releases come out often. To get them automatically, start `mhgurecomp-updater.exe` (`mhgurecomp-updater` on Linux)
+Releases may come out pretty often. To update automatically, start `mhgurecomp-updater.exe` (`mhgurecomp-updater` on Linux)
 instead of `mhgurecomp.exe`: point your shortcut at it, or on a Steam Deck add it as the non-Steam game. It asks
 GitHub for the latest release and, when that is newer than yours, offers to install it, then starts the game.
 `mhgurecomp.exe` itself never checks or updates anything; starting it directly is always fine.
@@ -103,7 +105,7 @@ To move an existing Switch save over, put its `system` and `system_backup` files
 
 ## Controls
 
-Almost every controller under the sun should work, as long as it has SDL support. If you really want to swap the face buttons on non-Nintendo controllers, open the .ini file and set `FaceButtons = Label`.
+Almost every controller under the sun should work, as long as it has SDL support. With more than one connected (a Steam Deck with a controller plugged in, say), press a button on the one you want to use. If you really want to swap the face buttons on non-Nintendo controllers, open the .ini file and set `FaceButtons = Label`.
 
 Keyboard and mouse support (not recommended):
 
@@ -131,7 +133,7 @@ screen, F12 takes a screenshot, F7 cycles MSAA.
 ## Settings
 
 Everything is in `mhgurecomp.ini`; each setting is explained in the file itself. The settings menu changes them in
-the game: **F1**, or **Minus + Plus** on a controller (Back + Start on an Xbox controller). Frame rate, FOV,
+the game: **F1**, or **Minus + Plus** on a controller (Back + Start on an Xbox controller). Frame rate, FOV, draw distance,
 anti-aliasing, VSync, controls and volume apply when you save; the settings marked * at the next start. Details:
 [docs/SETTINGS_UI.md](docs/SETTINGS_UI.md). In short:
 
@@ -143,13 +145,17 @@ anti-aliasing, VSync, controls and volume apply when you save; the settings mark
 - `[Upscaler]`: `FSR` (Off / On, default Off), `FSRQuality` (NativeAA / Quality / Balanced / Performance /
   UltraPerformance), `Sharpness`, and `Upscaler` (FSR3, the default, or FSR4: needs an AMD RDNA 4 GPU and its driver, and an exe built with `make FSR4_DRIVER_PATCH=1`;
   falls back to FSR 3.1). FSR replaces MSAA and FXAA while it is on. Details: `docs/FSR-PORT.md`, `docs/FSR4-PORT.md`
+- `[Graphics]`: `DrawDistance` (how far away people in the villages and the Hubs are still drawn: 1 = the game's,
+  2 = twice as far, 0.5 = half, 0 = no limit; up to 10)
 - `[Performance]`: `FPS` (30 to 240), `VSync` (On / Off; above your monitor's refresh rate, turn VSync off), `ShaderPrewarm`
   (On / Off: translate all of the game's shaders in the background at startup, so fewer things are drawn black the
   first time they appear; the first start takes about 20 s for it, during the logos, and the cache folder needs about
   340 MB)
 - `[Controls]`: `FaceButtons` (Position / Label), `MenuConfirm` (the settings menu's confirm button),
   `BackgroundInput` (On / Off: the controller keeps working while the game's window is in the background, such as
-  with a wiki in front of it; default On)
+  with a wiki in front of it; default On), `ComboInputWindow` (Lenient / Strict: how long the game waits for a
+  second button for inputs like the Hunting Horn's X+A; Lenient, the default, as long as at 30 fps at any frame
+  rate, Strict a fixed number of frames, shorter the higher the frame rate)
 - `[Mouse]`: `MouseSensitivity` (1 = default, 0.1 to 10)
 - `[Multiplayer]`: `Port`, `Join` (addresses of hosts outside your LAN), `SyncSmallMonsters`
 - `[Monster HP]`: HP factors for 1 to 4 hunters in Hub quests, and per-quest exceptions (default: all 1, the
@@ -157,7 +163,8 @@ anti-aliasing, VSync, controls and volume apply when you save; the settings mark
 - `[Village Quests]`: `VillageQuestsInHub` (default On), `HubHP` (default 2.0: Village quests posted in the Hub
   multiply their monsters' HP by this first, then by the `[Monster HP]` factor)
 - `[Bonus Content]`: `BonusContent` (default On), see below
-- `[Audio]`: `Volume` (0 to 100: the whole game)
+- `[Audio]`: `Volume` (0 to 100: the whole game), `MuteInBackground` (On / Off, default Off: no sound while the
+  game's window is in the background)
 - `[Application]`: `ConfirmExit` (ask before the window closes), and the settings menu's `Language` (English /
   Spanish), `ButtonIcons` (Xbox / Switch / PlayStation) and `MenuScale` (100 to 200 percent), and `Updates` (Ask /
   Auto / Off: what `mhgurecomp-updater` does, see "Staying up to date")
@@ -181,6 +188,15 @@ If you don't want this, set `BonusContent = Off` or don't provide a savegame in 
 To install a mod, put the mod folder in `mods\`. Remove the folder to uninstall said mod. Mods are layered over the game at startup.
 - romfs mods (files that replace or add game data) are found inside the mod's folder, including the
   `atmosphere\contents\0100770008DD8000\romfs` layout.
+- When several mods ship the same game archive (such as `resident_eng.arc`), only the entries each mod changed from the
+  game's are applied, so mods that change different files in it work together. If two mods change the same entry,
+  the one later in load order wins, and the log says so ("changes ..., which an earlier mod changed too"). Mods load in
+  alphabetical order. To choose the order, make `mods\load_order.txt` with one mod folder name per line: then only
+  the mods listed load, in that order. The merged archives are kept in `cache\arcmerge\`.
+- The **Mods** tab of the settings menu does this without editing files: it lists the mod folders, turns each on or
+  off, moves them up or down, and writes `mods\load_order.txt` when Save is pressed (restart to apply; mods you add
+  later load too, after the listed ones, until you turn them off). It also compares the mods and lists the ones that change the same game files (and which of
+  the two is used), and can apply a suggested order, with the mods that change the most files first.
 - exefs patches (`.pchtxt`, `.ips`) are applied when they change data. Patches to game code can't be applied, because
   the code is precompiled; the log lists them.
 - Forge plugins (`.nro` in `romfs\nativeNX\plugins\`) are loaded. Forge's menu with the plugins' settings opens with
@@ -190,6 +206,11 @@ To install a mod, put the mod folder in `mods\`. Remove the folder to uninstall 
 - You do not need any resolution, FPS cap or connection fix mods. These features are included with this port.
 
 If you are newer to the game, I very strongly recommend the [Key Quest Markers](https://gamebanana.com/mods/727960) mod by PurplefinNeptuna. This marks out the Village and Hub quests you need to complete for the next tier directly in the quest menu, which means you no longer need a wiki to play the damn game.
+
+**Good places to get mods:**
+
+- [The MHGURecomp-Mods repo](https://github.com/Oddity-git/MHGURecomp-mods)
+- [GameBanana](https://gamebanana.com/mods/games/17088)
 
 ### Cheats
 

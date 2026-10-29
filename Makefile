@@ -141,7 +141,10 @@ IMGUI    := third_party/cimgui
 IMGUI_SRC := $(IMGUI)/cimgui.cpp $(addprefix $(IMGUI)/imgui/,imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_demo.cpp)
 IMGUI_SRC += $(if $(filter 1,$(NULL_GPU)),,$(IMGUI)/imgui/backends/imgui_impl_vulkan.cpp)
 IMGUI_OBJ := $(patsubst $(IMGUI)/%.cpp,$(O)/imgui/%.o,$(IMGUI_SRC))
-IMGUIFLAGS := -std=gnu++17 -O2 -g -DCIMGUI_NO_EXPORT -I$(IMGUI) -I$(IMGUI)/imgui
+# (-fvisibility=hidden: without it the executable exports Dear ImGui's C++ symbols, and an overlay that links the
+# system ImGui (MangoHud -> libimgui.so.1) binds its HUD's calls into ours: its 1.91 ImFontAtlas handed to our 1.92
+# code crashes at swap-chain creation. Our own code and the Forge plugins' ImGui thunks bind inside the executable.)
+IMGUIFLAGS := -std=gnu++17 -O2 -g -fvisibility=hidden -DCIMGUI_NO_EXPORT -I$(IMGUI) -I$(IMGUI)/imgui
 # (vendored VulkanMemoryAllocator fallback: -I on a missing dir is ignored, so MSYS2 builds
 # with the system vulkan-memory-allocator package are unaffected)
 RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Ithird_party/vk_mem_alloc -I$(IMGUI) $(OSFLAGS)
@@ -238,7 +241,7 @@ $(O)/rt/overlay.o: runtime/overlay.cpp runtime/overlay.h runtime/forge.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(IMGUIFLAGS) $(if $(filter 1,$(NULL_GPU)),-DMHGU_NULL_BACKEND) -Wall -Iruntime $(OSFLAGS) -c $< -o $@
 
-$(O)/rt/settings_panel.o: runtime/settings_panel.cpp runtime/settings_panel.h runtime/config.h runtime/settings_locale.h runtime/settings_icons.h runtime/app_actions.h runtime/overlay.h
+$(O)/rt/settings_panel.o: runtime/settings_panel.cpp runtime/settings_panel.h runtime/modorder.h runtime/config.h runtime/settings_locale.h runtime/settings_icons.h runtime/app_actions.h runtime/overlay.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(IMGUIFLAGS) -Wall -Iruntime $(OSFLAGS) -c $< -o $@
 
@@ -413,7 +416,7 @@ dist: all
 
 # Exercise real ImGui navigation without a game dump or graphics device.
 .PHONY: test-settings-panel
-test-settings-panel: $(O)/rt/settings_panel.o $(O)/rt/config.o $(O)/rt/config_store.o $(O)/imgui/imgui/imgui.o $(O)/imgui/imgui/imgui_draw.o $(O)/imgui/imgui/imgui_tables.o $(O)/imgui/imgui/imgui_widgets.o
+test-settings-panel: $(O)/rt/settings_panel.o $(O)/rt/modorder.o $(O)/rt/arcmerge.o $(O)/rt/config.o $(O)/rt/config_store.o $(O)/imgui/imgui/imgui.o $(O)/imgui/imgui/imgui_draw.o $(O)/imgui/imgui/imgui_tables.o $(O)/imgui/imgui/imgui_widgets.o
 	@mkdir -p $(O)/settings-test
 	$(CXX) $(IMGUIFLAGS) -Iruntime $(OSFLAGS) tests/test_settings_panel.cpp $^ $(TEST_LDFLAGS) -lSDL3 -o $(O)/settings-test/test-settings-panel$(if $(filter windows,$(PLATFORM)),.exe)
 	$(O)/settings-test/test-settings-panel$(if $(filter windows,$(PLATFORM)),.exe)

@@ -5,6 +5,7 @@
 //   MHGU_WINDOW=WxH      windowed at that size, MHGU_RENDER=WxH  3D resolution, MHGU_MSAA=1|2|4|8, MHGU_FXAA=0|1,
 //                        MHGU_PAD_POSITIONAL=0|1 (test runs; override the file)
 #include <ctype.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,7 +17,7 @@
 #include "config.h"
 #include "rt.h"
 
-#define CONFIG_DEFAULT_VALUES DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 0, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 100, 0, 0, 100, MENU_CONFIRM_ORIGINAL, 1, 0, FSR_NATIVE, 0.8f, 1, 0.9f, 1, FSR_UP_3, UPDATES_ASK, 1
+#define CONFIG_DEFAULT_VALUES DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 0, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 100, 0, 0, 100, MENU_CONFIRM_ORIGINAL, 1, 0, FSR_NATIVE, 0.8f, 1, 0.9f, 1, FSR_UP_3, UPDATES_ASK, 1, 1.0f, 0, COMBO_LENIENT
 Config g_config = {CONFIG_DEFAULT_VALUES};
 Config config_defaults(void) { Config c = {CONFIG_DEFAULT_VALUES}; return c; }
 uint32_t g_render_size[2] = {1920, 1080};
@@ -99,6 +100,13 @@ static const char DEFAULT_INI[] =
     "; Default: On\n"
     "AnimSurf = On\n"
     "\n"
+    "[Graphics]\n"
+    "; How far away people in the villages and the Hubs are still drawn: 1 is the game's distance, 2 twice as far,\n"
+    "; 0.5 half as far, 0 no limit\n"
+    "; Between 0 and 10\n"
+    "; Default: 1.0\n"
+    "DrawDistance = 1.0\n"
+    "\n"
     "[Performance]\n"
     "; Framerate cap\n"
     "; Between 30 and 240\n"
@@ -130,6 +138,13 @@ static const char DEFAULT_INI[] =
     "; Controller input is also registered if the window is out of focus\n"
     "; Default: On\n"
     "BackgroundInput = On\n"
+    "\n"
+    "; How long the game waits for a second button after the first, for inputs like X+A. Lenient: as long as at 30 fps\n"
+    "; (on the Switch) at any frame rate. Strict: a fixed number of frames, so the higher the frame rate, the closer\n"
+    "; together both buttons have to be pressed\n"
+    "; Lenient, Strict\n"
+    "; Default: Lenient\n"
+    "ComboInputWindow = Lenient\n"
     "\n"
     "[Mouse]\n"
     "; Mouse sensitivity\n"
@@ -185,6 +200,10 @@ static const char DEFAULT_INI[] =
     "; Between 0 (mute) and 100\n"
     "; Default: 100\n"
     "Volume = 100\n"
+    "\n"
+    "; Mute the game while its window is in the background (not focused)\n"
+    "; Default: Off\n"
+    "MuteInBackground = Off\n"
     "\n"
     "[Application]\n"
     "; Ask before the game window closes (closing does not save the game)\n"
@@ -317,6 +336,13 @@ float camera_fovy(float fovy, float aspect) {
     return fovy;
 }
 
+// Town NPCs (uLobbyNpc: villages, Hubs) fade in within a distance from the game's table (2500 units, 1800 for some)
+// and out beyond it; tools/gen.py PATCHES hands its square here. [Graphics] DrawDistance scales it, 0 is no limit.
+float npc_fade_dist2(float d2) {
+    float m = config_live_draw_distance();
+    return m > 0 ? d2 * m * m : FLT_MAX;
+}
+
 // A picture shape: "Auto" (0), "21:9" / "21/9", or a number (0.5 .. 10).
 static bool parse_aspect(const char *v, float *out) {
     float n, d, a;
@@ -349,6 +375,7 @@ static bool parse_aspect(const char *v, float *out) {
 #define ERR_ICONS "Invalid button icon layout."
 #define ERR_LANGUAGE "Invalid menu language."
 #define ERR_UPDATES "Invalid update setting."
+#define ERR_DRAW "Draw distance must be 0-10 (0: no limit)."
 #define F(x) offsetof(Config, x)
 #define ON_OFF(section, key, field, restart) {section, key, SET_BOOL, F(field), 0, 0, 0, NULL, NULL, restart, ERR_TOGGLE}
 static const int anchor_values[] = {UI_CENTER, UI_21_9, UI_32_9, UI_EDGES}, msaa_values[] = {1, 2, 4, 8};
@@ -371,6 +398,7 @@ const ConfigSetting g_settings[] = {
     ON_OFF("Upscaler", "ObjectMotion", fsr_objmotion, true),
     {"Upscaler", "Reactive", SET_FLOAT, F(fsr_reactive), 0, 0.0f, 1.0f, NULL, NULL, true, ERR_FSR},
     ON_OFF("Upscaler", "AnimSurf", fsr_animsurf, true),
+    {"Graphics", "DrawDistance", SET_FLOAT, F(draw_distance), 0, 0.0f, 10.0f, NULL, NULL, false, ERR_DRAW},
     {"Performance", "FPS|FrameRate", SET_INT, F(fps), 0, 30, 240, NULL, NULL, false, ERR_MISC},
     ON_OFF("Performance", "VSync", vsync, false),
     ON_OFF("Performance", "ShaderPrewarm", shader_prewarm, true),
@@ -378,6 +406,7 @@ const ConfigSetting g_settings[] = {
      NULL, false, ERR_MISC},
     {"Controls", "MenuConfirm", SET_CHOICE, F(menu_confirm), 0, 0, 0, "Original,South,East", NULL, false, ERR_CONFIRM},
     ON_OFF("Controls", "BackgroundInput", background_input, false),
+    {"Controls", "ComboInputWindow", SET_CHOICE, F(combo_window), 0, 0, 0, "Lenient,Strict", NULL, false, ERR_MISC},
     {"Mouse", "MouseSensitivity", SET_FLOAT, F(mouse_sensitivity), 0, 0.1f, 10.0f, NULL, NULL, false, ERR_VIEW},
     {"Multiplayer", "Port", SET_INT, F(ldn_port), 0, 1, 65535, NULL, NULL, true, ERR_NET},
     {"Multiplayer", "Join", SET_TEXT, F(ldn_join), sizeof g_config.ldn_join, 0, 0, NULL, NULL, true, ERR_NET},
@@ -390,6 +419,7 @@ const ConfigSetting g_settings[] = {
     {"Village Quests", "HubHP", SET_FACTOR, F(hp.village), 0, HP_SCALE_MIN, HP_SCALE_MAX, NULL, NULL, true, ERR_VILLAGE},
     ON_OFF("Bonus Content", "BonusContent", bonus_content, true),
     {"Audio", "Volume", SET_INT, F(volume), 0, 0, 100, NULL, NULL, false, ERR_MISC},
+    ON_OFF("Audio", "MuteInBackground", mute_in_background, false),
     ON_OFF("Application", "ConfirmExit", confirm_exit, false),
     {"Application", "Language", SET_CHOICE, F(language), 0, 0, 0, "English|en,Spanish|es", NULL, false, ERR_LANGUAGE},
     {"Application", "ButtonIcons", SET_CHOICE, F(button_icons), 0, 0, 0, "Xbox,Switch,PlayStation", NULL, false, ERR_ICONS},
