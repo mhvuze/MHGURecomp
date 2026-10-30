@@ -4,7 +4,8 @@
 //   in the window to capture the mouse, Esc releases it), left click = X, right click = A, Space = B, R = Y, Q = L,
 //   E = R, Tab = ZL, T = ZR, Enter = Plus, Backspace = Minus, arrow keys = d-pad, Ctrl = left stick click, Alt = right
 //   stick click. While the game shows a text entry (names, chat) the keyboard types instead
-//   (runtime/textinput.c). F11 switches windowed <-> full screen, F12 saves a screenshot, Shift+F12 the next 8
+//   (runtime/textinput.c). / ([Controls] ChatKey) opens a line of chat, Enter sends it, also in a quest (runtime/hle/chat.c).
+//   F11 switches windowed <-> full screen, F12 saves a screenshot, Shift+F12 the next 8
 //   frames (exact rendered pixels, run\shots\), F10 dumps every render pass of the next 2 frames (debug, slow), F9 toggles how colour clears are done (debug).
 // Gamepad (SDL): face buttons by position as on a Switch controller (the bottom one is B), or by their labels
 //   (settings FaceButtons, runtime/config.c; MHGU_PAD_POSITIONAL=0|1 overrides).
@@ -24,6 +25,7 @@
 #include "config.h"
 #include "menu_confirm.h"
 #include "forge.h"
+#include "hle/chat.h"
 #include "hle/input.h"
 #include "overlay.h"
 #include "rt.h"
@@ -479,9 +481,45 @@ static void pick_pad(void) {  // over every controller SDL sees now: those MHGU_
     SDL_free(ids);
 }
 
+// While a line of chat is typed the pointer shows, and dragging the box moves it (kept in chat_box.txt)
+static bool chat_mouse(const SDL_Event *e) {
+    static bool dragging;
+    static float last_x, last_y;
+    if (!chat_active()) {
+        dragging = false;
+        return false;
+    }
+    int w = 0, h = 0;
+    SDL_Window *win = ui_window();
+    if (win) SDL_GetWindowSize(win, &w, &h);
+    if (w <= 0 || h <= 0) return false;
+    switch (e->type) {
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        if (e->button.button == SDL_BUTTON_LEFT && chat_in_box(e->button.x / w, e->button.y / h))
+            dragging = true, last_x = e->button.x, last_y = e->button.y;
+        return true;
+    case SDL_EVENT_MOUSE_MOTION:
+        if (dragging) {
+            chat_move((e->motion.x - last_x) / w, (e->motion.y - last_y) / h);
+            last_x = e->motion.x, last_y = e->motion.y;
+        }
+        return true;
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (dragging && e->button.button == SDL_BUTTON_LEFT) {
+            dragging = false;
+            chat_save_position();
+        }
+        return true;
+    case SDL_EVENT_MOUSE_WHEEL:
+        return true;
+    }
+    return false;
+}
+
 void host_input_event(const SDL_Event *e) {
     if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) pad_pressed(e->gbutton.which);
     if (overlay_event(e)) return;  // (Forge's menu open: keyboard and mouse are its)
+    if (chat_mouse(e)) return;  // (typing a line of chat: the mouse drags its box)
     if (textinput_event(e)) return;  // (typing into a text entry: not controller buttons)
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP:
@@ -493,6 +531,9 @@ void host_input_event(const SDL_Event *e) {
                 keys[e->key.scancode] = false;  // (Alt+Enter: windowed <-> full screen, not a button press)
                 keys[SDL_SCANCODE_LALT] = keys[SDL_SCANCODE_RALT] = false;
                 ui_toggle_fullscreen();
+            } else if ((int)e->key.scancode == config_live_chat_key() && config_live_chat_key()) {
+                keys[e->key.scancode] = false;
+                chat_open();  // (a line to type, sent as chat: runtime/hle/chat.c)
             } else if (e->key.scancode == SDL_SCANCODE_ESCAPE) {
                 if (mouse_grab) LOG("[input] mouse released\n");
                 mouse_grab = false;
@@ -559,7 +600,7 @@ static int32_t clamp_axis(int v) { return v < -32767 ? -32767 : v > 32767 ? 3276
 
 // Capture or release the mouse as wanted, and add its movement to the right stick.
 static void mouse_update(int *rx, int *ry) {
-    bool want = mouse_grab && !overlay_menu_open();  // (Forge's menu: the pointer is its)
+    bool want = mouse_grab && !overlay_menu_open() && !chat_active();  // (Forge's menu, the chat box: the pointer is theirs)
     SDL_Window *w = ui_window();
     if (want != mouse_captured && w) {
         if (SDL_SetWindowRelativeMouseMode(w, want) || !want) {
@@ -569,6 +610,12 @@ static void mouse_update(int *rx, int *ry) {
             mouse_grab = false, mouse_no_capture = true;
         }
         mouse_dx = mouse_dy = 0;
+    }
+    static bool chat_pointer;  // (full screen hides the pointer: shown while the chat box can be dragged)
+    if (chat_active() != chat_pointer && w) {
+        chat_pointer = chat_active();
+        if (chat_pointer) SDL_ShowCursor();
+        else if (SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN) SDL_HideCursor();
     }
     static uint64_t last;
     static float vx, vy;  // the speed, smoothed: counts a second
@@ -751,10 +798,11 @@ void host_input_update(void) {
     static uint64_t was;
     uint64_t down = b & ~was;
     was = b;
-    if (typing) {  // Plus (Start) confirms, B cancels the entry; the game keeps the rest of the controller. Dropping it
-                   // whole read as a lock-up: with no keyboard on screen (the game's own inline keyboard needs
-                   // nativeNX/arc/swkbd_eu.arc, which is missing), a pad-only player had no way out - B only reopened
-                   // the entry.
+    // Plus (Start) confirms, B cancels the entry; the game keeps the rest of the controller. Dropping it whole read as a
+    // lock-up: with no keyboard on screen (the game's own inline keyboard needs nativeNX/arc/swkbd_eu.arc, which is
+    // missing), a pad-only player had no way out - B only reopened the entry. A line of chat (runtime/hle/chat.c)
+    // leaves them to the game: it is typed on the keyboard, and B mid-hunt is a dodge, not losing the line.
+    if (typing && !chat_active()) {
         if (down & B(BTN_PLUS)) textinput_key(TI_ENTER);
         else if (down & B(BTN_B)) textinput_key(TI_CANCEL);
         b &= ~(B(BTN_PLUS) | B(BTN_B));

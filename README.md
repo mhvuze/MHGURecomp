@@ -23,7 +23,8 @@ Status: fully playable, but there may be some bugs. I've played a dozen hunts wi
 - Optional: village quests are playable in multiplayer (press L/R at the quest counter), with appropriately re-scaled monster HP
 - Mod support. The vast majority of mods work by dropping them into the `mods` folder, including Forge mods. (see [Mods](#mods))
 - Cheat codes in the same format as Ryujinx and Atmosphère, in the `cheats` folder (see [Cheats](#cheats))
-- Ingame PC Settings menu overlay (F1 to open, will be replaced with a real settings menu in the future)
+- Ingame PC Settings menu overlay (F1 or `Plus`+`Minus` to open, will be replaced with a real settings menu in the future)
+- Working online multiplayer servers, in public or with friends (use "Local Wireless" menu)
 
 ## Requirements
 
@@ -126,7 +127,7 @@ Click in the game window to capture the mouse for the camera; Escape lets it go 
 window). `MouseSensitivity` in the ini's `[Mouse]` section sets its speed; the game's own camera options (speed,
 inverted axes) apply to it too.
 
-When the game asks for text (names, chat), the keyboard types: Enter confirms, Escape cancels, Ctrl+V pastes.
+When the game asks for text (names, chat), the keyboard types: Enter confirms, Escape cancels, Ctrl+V pastes. `/` opens a line of chat anywhere, also in a quest (where the game itself only has shoutouts): type (up to 120 characters), Enter sends it to everyone as a shoutout is sent, split between words into lines of the chat window, Escape cancels. While typing, the mouse drags the box elsewhere (kept in `chat_box.txt`). Change the key in Settings (F1), Controls, Chat key: it shows red when the keyboard controls already use that key.
 
 Other keys: F1 opens the settings menu, Alt+Enter (Option+Enter on a Mac) or F11 switches between windowed and full
 screen, F12 takes a screenshot, F7 cycles MSAA.
@@ -142,7 +143,8 @@ anti-aliasing, VSync, controls and volume apply when you save; the settings mark
   `AspectRatio` (Auto follows the window: 16:10 and anything wider fill it, narrower gets 16:10 with bars), `FOV`
   (1.0 = the game's), `UIAnchor` (Center keeps the HUD in the middle 16:9 on an ultrawide screen, Edges spreads it
   to the sides)
-- `[Anti-aliasing]`: `MSAA` (Off / 2x / 4x / 8x), `FXAA` (On / Off)
+- `[Anti-aliasing]`: `MSAA` (Off / 2x / 4x / 8x), `FXAA` (On / Off), `FXAAMode` (Original / 3_11: FXAA 3.11 in
+  place of GU's FXAA, sharper textures; default Original)
 - `[Upscaler]`: `FSR` (Off / On, default Off), `FSRQuality` (NativeAA / Quality / Balanced / Performance /
   UltraPerformance), `Sharpness`, and `Upscaler` (FSR3, the default, or FSR4: needs an AMD RDNA 4 GPU and its driver, and an exe built with `make FSR4_DRIVER_PATCH=1`;
   falls back to FSR 3.1). FSR replaces MSAA and FXAA while it is on. Details: `docs/FSR-PORT.md`, `docs/FSR4-PORT.md`

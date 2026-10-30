@@ -17,7 +17,7 @@
 #include "config.h"
 #include "rt.h"
 
-#define CONFIG_DEFAULT_VALUES DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 0, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 100, 0, 0, 100, MENU_CONFIRM_ORIGINAL, 1, 0, FSR_NATIVE, 0.8f, 1, 0.9f, 1, FSR_UP_3, UPDATES_ASK, 1, 1.0f, 0, COMBO_LENIENT, "", ""
+#define CONFIG_DEFAULT_VALUES DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 0, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 100, 0, 0, 100, MENU_CONFIRM_ORIGINAL, 1, 0, FSR_NATIVE, 0.8f, 1, 0.9f, 1, FSR_UP_3, UPDATES_ASK, 1, 1.0f, 0, COMBO_LENIENT, "", "", "/", FXAA_ORIGINAL
 Config g_config = {CONFIG_DEFAULT_VALUES};
 Config config_defaults(void) { Config c = {CONFIG_DEFAULT_VALUES}; return c; }
 uint32_t g_render_size[2] = {1920, 1080};
@@ -66,6 +66,11 @@ static const char DEFAULT_INI[] =
     "; GU's default FXAA\n"
     "; Default: On\n"
     "FXAA = On\n"
+    "\n"
+    "; Which FXAA: Original is GU's own, 3_11 is FXAA 3.11, which keeps textures sharper\n"
+    "; Original, 3_11\n"
+    "; Default: Original\n"
+    "FXAAMode = Original\n"
     "\n"
     "[Upscaler]\n"
     "; FSR temporal upscaling\n"
@@ -145,6 +150,11 @@ static const char DEFAULT_INI[] =
     "; Lenient, Strict\n"
     "; Default: Lenient\n"
     "ComboInputWindow = Lenient\n"
+    "\n"
+    "; The key that opens a line of chat, anywhere (in a quest too): a key's name as the settings menu shows it, or\n"
+    "; nothing for none\n"
+    "; Default: /\n"
+    "ChatKey = /\n"
     "\n"
     "[Mouse]\n"
     "; Mouse sensitivity\n"
@@ -404,6 +414,7 @@ const ConfigSetting g_settings[] = {
      ERR_MISC},
     {"Anti-aliasing", "MSAA", SET_CHOICE, F(msaa), 0, 0, 0, "Off|none|0|1|1x,2x|2,4x|4,8x|8", msaa_values, false, ERR_MISC},
     ON_OFF("Anti-aliasing", "FXAA", fxaa, false),
+    {"Anti-aliasing", "FXAAMode", SET_CHOICE, F(fxaa_mode), 0, 0, 0, "Original,3_11", NULL, false, ERR_MISC},
     ON_OFF("Upscaler", "FSR", fsr, true),
     {"Upscaler", "Upscaler", SET_CHOICE, F(fsr_upscaler), 0, 0, 0, "FSR3|fsr3.1|3,FSR4|4", NULL, true, ERR_FSR},
     {"Upscaler", "FSRQuality", SET_CHOICE, F(fsr_quality), 0, 0, 0,
@@ -421,6 +432,7 @@ const ConfigSetting g_settings[] = {
     {"Controls", "MenuConfirm", SET_CHOICE, F(menu_confirm), 0, 0, 0, "Original,South,East", NULL, false, ERR_CONFIRM},
     ON_OFF("Controls", "BackgroundInput", background_input, false),
     {"Controls", "ComboInputWindow", SET_CHOICE, F(combo_window), 0, 0, 0, "Lenient,Strict", NULL, false, ERR_MISC},
+    {"Controls", "ChatKey", SET_TEXT, F(chat_key), sizeof g_config.chat_key, 0, 0, NULL, NULL, false, ERR_MISC},
     {"Mouse", "MouseSensitivity", SET_FLOAT, F(mouse_sensitivity), 0, 0.1f, 10.0f, NULL, NULL, false, ERR_VIEW},
     {"Multiplayer", "Port", SET_INT, F(ldn_port), 0, 1, 65535, NULL, NULL, true, ERR_NET},
     {"Multiplayer", "Join", SET_TEXT, F(ldn_join), sizeof g_config.ldn_join, 0, 0, NULL, NULL, true, ERR_NET},

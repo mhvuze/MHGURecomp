@@ -787,13 +787,16 @@ static bool ui_relax_scissor;  // the draw being set up moved a HUD piece out fr
 static int ui_scissor_v = -1;  // 16:10: the draw being set up is a HUD piece anchored so (0 top, 1 centre, 2 bottom),
                                // and its scissor moves with it
 static bool ui_menu_pass;  // this pass drew a layer 97 menu before (the windows of layer 100 then sit beside Top-anchored ones)
-// The HUD quads this pass drew last (16:9 canvas place, vertical anchor 0 top / 1 centre / 2 bottom): a model preview
-// follows the window drawn over it (ui_preview_map)
+// The HUD quads this pass drew last (16:9 canvas place, vertical anchor 0 top / 1 centre / 2 bottom, horizontal 0 left /
+// 1 right / 2 centre): a model preview follows the window drawn over it (ui_preview_map)
 #define UI_RECENT 256
-static struct { float x, y; uint8_t vanchor; } ui_recent[UI_RECENT];
+static struct { float x, y; uint8_t vanchor, hanchor; } ui_recent[UI_RECENT];
 static uint32_t ui_nrecent;  // (quads recorded this pass; the slot is the count modulo UI_RECENT)
 static bool ui_loading_pass;  // this pass draws the loading screen (its backdrop, layer 110, came first)
 static bool ui_title_pass;  // this pass draws the title screen (its layout, layer 108 at the canvas centre, came first)
+static bool ui_frontend_pass;  // this pass draws a front-end screen (Main Menu, Character Select: its 16:9 backdrop, layer
+                               // 250 at the canvas centre, came first)
+static bool ui_stamp_pass;  // this pass draws the Quest Complete stamp (its borders, layer 97 at x 640, y 53 / 687, came first)
 static bool ui_results_pass, ui_results_last;  // this pass / the last pass with HUD in it draws the quest results screen
 volatile int g_hudtrace_active;  // (debug) MHGU_CONTROL "hudtrace": log every HUD quad of the next frame and its anchor (device.c)
 
@@ -1316,6 +1319,8 @@ static void begin_pass(void) {
     pass_w = minw; pass_h = minh;
     ui_loading_pass = false;
     ui_title_pass = false;
+    ui_frontend_pass = false;
+    ui_stamp_pass = false;
     ui_results_pass = false;
     ui_menu_pass = false;
     ui_nrecent = 0;
@@ -1416,22 +1421,29 @@ static bool ui_preview_map(PreviewMap *pm) {
     *pm = (PreviewMap){0, 1, 0, 1};
     // The window it is drawn in: the last quad over the viewport (inside it sideways, not below it). The last quad of all
     // can be a button prompt under the window ("Rotate" under the Palico Scout preview), anchored apart from it.
-    int vanchor = ui_nrecent ? ui_recent[(ui_nrecent - 1) % UI_RECENT].vanchor : 1;
+    int vanchor = ui_nrecent ? ui_recent[(ui_nrecent - 1) % UI_RECENT].vanchor : 1, hanchor = -1;
     {
         float x0 = vp[0] / pw * 1280.0f, x1 = (vp[0] + w) / pw * 1280.0f, y1 = (fminf(vp[1], vp[1] + vp[3]) + h) / ph * 720.0f;
         for (uint32_t i = ui_nrecent; i > 0 && ui_nrecent - i < UI_RECENT; i--) {
             uint32_t k = (i - 1) % UI_RECENT;
-            if (ui_recent[k].x >= x0 && ui_recent[k].x <= x1 && ui_recent[k].y <= y1) { vanchor = ui_recent[k].vanchor; break; }
+            if (ui_recent[k].x >= x0 && ui_recent[k].x <= x1 && ui_recent[k].y <= y1) {
+                vanchor = ui_recent[k].vanchor, hanchor = ui_recent[k].hanchor;
+                break;
+            }
         }
     }
     if (asp > 16.0f / 9.0f) {
         float s = (16.0f / 9.0f) / asp;
-        float anchor = g_ui_anchor_aspect < asp ? g_ui_anchor_aspect : asp;
+        float ui = ui_frontend_pass ? 16.0f / 9.0f : g_ui_anchor_aspect;  // (front-end screens: as their HUD, cbuf_info)
+        float anchor = ui < asp ? ui : asp;
         float left_px = 640.0f * (1.0f - anchor / asp) * (pw / 1280.0f);
         float cx = (vp[0] + w * 0.5f) / pw * 1280.0f;
+        // sideways as its window went (the smithy's parchment, layer 100, goes Right: by its own place the model went
+        // Left, out of it), or by where it is when no window is over it
+        if (hanchor < 0) hanchor = cx <= 430.0f ? 0 : cx >= 650.0f ? 1 : 2;
         pm->kx = s;
-        if (cx <= 430.0f) pm->sx = left_px;
-        else if (cx >= 650.0f) pm->sx = pw - left_px - pw * s;
+        if (hanchor == 0) pm->sx = left_px;
+        else if (hanchor == 1) pm->sx = pw - left_px - pw * s;
         else pm->sx = pw * 0.5f * (1.0f - s);
     } else {
         float sy = asp / (16.0f / 9.0f);
@@ -3079,13 +3091,18 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                 // Layer 110 is the loading screen's scrolling backdrop: strips at y 168 / 433 / 570 that must stay one picture.
                 // The generic rule anchored each strip to a different edge and flattened it, leaving gaps between them.
                 // They keep their height (as on a stretched 16:9 canvas), so nothing moves vertically.
+                bool loading_strip = false;
                 if (fabsf(pos_z - 110.0f) < 0.5f) {
                     sy = 1.0f;
                     // (only the strips: the lock-on markers and other effects use layer 110 too, mid-hunt, and made
                     // everything after them center-anchored, so the HUD jumped down)
-                    if (fabsf(pos_y - 168.0f) < 0.3f || fabsf(pos_y - 433.0f) < 0.3f || fabsf(pos_y - 570.0f) < 0.3f) ui_loading_pass = true;
+                    loading_strip = fabsf(pos_y - 168.0f) < 0.3f || fabsf(pos_y - 433.0f) < 0.3f || fabsf(pos_y - 570.0f) < 0.3f;
+                    if (loading_strip) ui_loading_pass = true;
                 }
-                float anchor_aspect = g_ui_anchor_aspect;  // (config.c: 16:9 .. the screen's)
+                // Front-end screens keep their backdrop 16:9: the HUD stays on it as with the 16:9 anchor. Edges / 21:9 / 32:9
+                // took their centred menus (layer 100, x 640, anchored Right) and the help box (96) off it, to the sides.
+                if (fabsf(pos_z - 250.0f) < 0.5f && fabsf(pos_x - 640.0f) < 0.5f && fabsf(pos_y - 360.0f) < 0.5f) ui_frontend_pass = true;
+                float anchor_aspect = ui_frontend_pass ? 16.0f / 9.0f : g_ui_anchor_aspect;  // (config.c: 16:9 .. the screen's)
                 if (anchor_aspect > g_render_aspect) anchor_aspect = g_render_aspect;
                 float a_ratio = anchor_aspect / g_render_aspect;
                 float anchor_left = 640.0f * (1.0f - a_ratio);
@@ -3140,6 +3157,12 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                         // The Quest Complete banner's lower border slides in from y 739: it belongs to the bottom edge.
                         vanchor = pos_y > 650.0f ? V_BOTTOM : V_TOP;
                         if (fabsf(pos_z - 97.0f) < 0.5f) ui_menu_pass = true;
+                        // The Quest Complete stamp is one picture, after its borders (x 640, by the top and bottom edges; the
+                        // lower one slides in from y 739). Right / Left by place split it on a wide picture, its tilted
+                        // "QUEST" (x -17) left of the rest.
+                        if (fabsf(pos_z - 97.0f) < 0.5f && fabsf(pos_x - 640.0f) < 0.5f && (pos_y < 60.0f || pos_y > 680.0f))
+                            ui_stamp_pass = true;
+                        if (ui_stamp_pass) anchor = ANCHOR_CENTER;
                     } else if (fabsf(pos_z - 100.0f) < 0.5f) {
                         // 100.0: Hunter Arts HUD and bottom right prompts (y > 600) -> Bottom anchor
                         // Target cam selector (right edge, y 42..82: x > 1000, y < 360) -> Top anchor, so it stays by the minimap.
@@ -3185,10 +3208,19 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                     // parchment, the header went down). The bar is drawn after the stamp, so the last pass also tells.
                     if (fabsf(pos_z - 99.0f) < 0.5f && fabsf(pos_y - 643.0f) < 0.5f && (fabsf(pos_x - 80.0f) < 0.5f || fabsf(pos_x - 1180.0f) < 0.5f))
                         ui_results_pass = true;
-                    if ((ui_results_pass || ui_results_last) && pos_z > 98.5f && pos_z < 101.5f)
+                    // Sideways the middle is one table, centred (layer 100's Right took it right of the stamp it sits on, with
+                    // Edges / 21:9), and the header and page counter go to their side.
+                    if ((ui_results_pass || ui_results_last) && pos_z > 98.5f && pos_z < 101.5f) {
                         vanchor = pos_y < 60.0f ? V_TOP : pos_y > 600.0f ? V_BOTTOM : V_CENTER;
-
-                    if (anchor == ANCHOR_LEFT) {
+                        if (vanchor == V_CENTER) anchor = ANCHOR_CENTER;
+                        else if (vanchor == V_TOP) anchor = pos_x <= 430.0f ? ANCHOR_LEFT : pos_x >= 650.0f ? ANCHOR_RIGHT : ANCHOR_CENTER;
+                    }
+                    // The loading backdrop's tiles (x -30, 549, 1128...: one every 579, past 1280) are one picture sideways
+                    // too, from the screen's left edge: by place they went Left / Centre / Right, three copies with gaps
+                    // between them with Edges / 21:9; centred (or Center), nothing covered the left of the first tile.
+                    if (loading_strip) {
+                        new_pos_x = pos_x * s;
+                    } else if (anchor == ANCHOR_LEFT) {
                         new_pos_x = anchor_left + pos_x * s;
                     } else if (anchor == ANCHOR_RIGHT) {
                         new_pos_x = anchor_right - (1280.0f - pos_x) * s;
@@ -3198,6 +3230,7 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                     int v = vanchor == V_TOP ? 0 : vanchor == V_BOTTOM ? 2 : 1;
                     ui_recent[ui_nrecent % UI_RECENT].x = pos_x, ui_recent[ui_nrecent % UI_RECENT].y = pos_y;
                     ui_recent[ui_nrecent % UI_RECENT].vanchor = (uint8_t)v;
+                    ui_recent[ui_nrecent % UI_RECENT].hanchor = (uint8_t)anchor;
                     ui_nrecent++;
                     if (vanchor == V_TOP) new_pos_y = pos_y * sy;
                     else if (vanchor == V_BOTTOM) new_pos_y = 720.0f - (720.0f - pos_y) * sy;
@@ -3425,14 +3458,107 @@ static uint64_t prog_fs_hash(Prog *p) {
     return p->chash[1];
 }
 
-// FXAA off (settings): the game's FXAA pass (recognised by its shader) copies its input instead.
+// FXAA 3.11 (FXAAMode = 3_11): the game's FXAA pass draws shaders.c "fxaa.frag" instead, from the same input into the
+// same target. False: not possible, the game's own pass draws.
+static VkDescriptorSetLayout fxaa_set_layout;
+static VkPipelineLayout fxaa_layout;
+
+static VkPipeline fxaa_pipeline(VkRenderPass rp) {
+    static struct { VkRenderPass rp; VkPipeline p; } tab[8];
+    static int n;
+    for (int i = 0; i < n; i++) if (tab[i].rp == rp) return tab[i].p;
+    if (!fxaa_layout) {
+        VkDescriptorSetLayoutBinding b = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
+        VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 1, .pBindings = &b};
+        VK_CHECK(vkCreateDescriptorSetLayout(g_vk.dev, &li, NULL, &fxaa_set_layout));
+        VkPipelineLayoutCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1,
+                                         .pSetLayouts = &fxaa_set_layout};
+        VK_CHECK(vkCreatePipelineLayout(g_vk.dev, &ci, NULL, &fxaa_layout));
+    }
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT,
+         .module = vk_builtin_shader("resolve.vert"), .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+         .module = vk_builtin_shader("fxaa.frag"), .pName = "main"}};
+    VkPipelineVertexInputStateCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+                                                 .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
+    VkPipelineViewportStateCreateInfo vs = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1,
+                                            .scissorCount = 1};
+    VkPipelineRasterizationStateCreateInfo rs = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                                                 .polygonMode = VK_POLYGON_MODE_FILL, .lineWidth = 1};
+    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+                                               .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
+    VkPipelineColorBlendAttachmentState att = {.colorWriteMask = 0xF};
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+                                              .attachmentCount = 1, .pAttachments = &att};
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dy = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2,
+                                           .pDynamicStates = dyn};
+    VkGraphicsPipelineCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .stageCount = 2,
+                                       .pStages = stages, .pVertexInputState = &vi, .pInputAssemblyState = &ia,
+                                       .pViewportState = &vs, .pRasterizationState = &rs, .pMultisampleState = &ms,
+                                       .pColorBlendState = &cb, .pDynamicState = &dy, .layout = fxaa_layout, .renderPass = rp};
+    VkPipeline p = VK_NULL_HANDLE;
+    if (vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, &p) != VK_SUCCESS) LOG("[vk] FXAA pipeline failed\n");
+    if (n < 8) tab[n].rp = rp, tab[n++].p = p;
+    return p;
+}
+
+static bool fxaa_311(NvnTexture *src) {
+    NvnTexture *dt = st.rt.color[0];
+    TexBackend *s = vk_tex(src, false), *d = vk_tex(dt, true);
+    if (s->samples != 1 || d->samples != 1) return false;
+    vk_end_pass();
+    st.rt_dirty = true;
+    vk_ms_resolve(s);
+    vk_ms_resolve(d);
+    bool has = st.rt.has_cview[0];
+    VkImageView sv = vk_view(src, NULL, false, false, TEXTYPE_2D), dv = vk_view(dt, &st.rt.cview[0], has, true, TEXTYPE_2D);
+    VkFormat f = has && (st.rt.cview[0].setmask & 4) && vk_format(dt->format) == d->format ? vk_format(st.rt.cview[0].format)
+                                                                                           : d->format;
+    VkRenderPass rp = vk_render_pass(&f, 1, VK_FORMAT_UNDEFINED, 1);
+    VkPipeline p = sv && dv ? fxaa_pipeline(rp) : VK_NULL_HANDLE;
+    if (!p) return false;
+    d->ms_valid = false;
+    renderer_mark_gpu_owned(dt);
+    uint32_t lv = has && (st.rt.cview[0].setmask & 1) ? st.rt.cview[0].base_level : 0;
+    uint32_t w = level_extent(d->width, lv), h = level_extent(d->height, lv);
+    VkCommandBuffer cb = vk_cmd();
+    vk_full_barrier(cb);
+    VkDescriptorSet set = vk_alloc_set(fxaa_set_layout);
+    VkDescriptorImageInfo ii = {vk_default_sampler(true), sv, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet wr = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .dstBinding = 0, .descriptorCount = 1,
+                               .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &ii};
+    vkUpdateDescriptorSets(g_vk.dev, 1, &wr, 0, NULL);
+    VkRect2D area = {{0, 0}, {w, h}};
+    VkRenderPassBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = rp,
+                                .framebuffer = vk_framebuffer(rp, &dv, 1, w, h), .renderArea = area};
+    vkCmdBeginRenderPass(cb, &bi, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, fxaa_layout, 0, 1, &set, 0, NULL);
+    VkViewport vp = {0, 0, (float)w, (float)h, 0, 1};
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    vkCmdSetScissor(cb, 0, 1, &area);
+    vkCmdDraw(cb, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cb);
+    ss_forget();
+    stat_draws++;
+    return true;
+}
+
+// FXAA off (settings): the game's FXAA pass (recognised by its shader) copies its input instead; FXAAMode = 3_11 draws
+// FXAA 3.11 there (fxaa_311).
 #define FXAA_FS_HASH 0x8530ded68f4407dfull
 static void copy_texture(const TexRef *src, const TexRef *dst, uint64_t flags);
 static bool fxaa_skipped(Prog *pr) {
-    if (config_live_fxaa() || prog_fs_hash(pr) != FXAA_FS_HASH || pr->fi->ntex != 1 || !st.rt.ncolor || !st.rt.color[0])
+    bool fxaa_311_on = config_live_fxaa() && config_live_fxaa_mode() == FXAA_311;
+    if ((config_live_fxaa() && !fxaa_311_on) || prog_fs_hash(pr) != FXAA_FS_HASH || pr->fi->ntex != 1 || !st.rt.ncolor ||
+        !st.rt.color[0])
         return false;
     NvnTexture *src = shader_texture_object(1, &pr->fi->tex[0]);
     if (!src || src == st.rt.color[0]) return false;
+    if (fxaa_311_on) return fxaa_311(src);
     TexRef s = {.tex = (uint64_t)(uintptr_t)src}, d = {.tex = (uint64_t)(uintptr_t)st.rt.color[0]};
     if (st.rt.has_cview[0]) d.view = st.rt.cview[0], d.has_view = 1;
     copy_texture(&s, &d, 0);
