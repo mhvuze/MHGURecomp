@@ -61,6 +61,7 @@ static NSTextField *label(NSString *text, CGFloat size, bool bold, bool secondar
 @property(strong) NSSegmentedControl *questButtons;  // + / -
 @property(strong) NSMutableArray<NSSlider *> *hunterSliders;
 @property(strong) NSMutableArray<NSTextField *> *hunterFields;
+@property(strong) NSString *lastHelp;  // (the row above's: rows that share it, as the keybinds, show it once)
 @end
 
 static MHGUSettingsWindow *g_settings_window;
@@ -508,7 +509,8 @@ static NSView *people(int n) {
     box.alignment = NSLayoutAttributeLeading;
     box.spacing = 3;
     char help[2048];
-    if (config_help(st->key, help, sizeof help)) {
+    if (config_help(st->key, help, sizeof help) && ![str(help) isEqual:self.lastHelp]) {
+        self.lastHelp = str(help);
         NSTextField *h = label(str(help), 11, false, true);
         h.preferredMaxLayoutWidth = 470;
         NSStackView *indent = [NSStackView stackViewWithViews:@[ h ]];
@@ -521,6 +523,7 @@ static NSView *people(int n) {
 - (NSView *)tabView:(NSString *)tab {
     if ([tab isEqual:@"Monster HP"]) return [self scrolled:[self monsterHPView]];
     NSStackView *stack = [NSStackView stackViewWithViews:@[]];
+    self.lastHelp = nil;
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
     stack.spacing = 14;

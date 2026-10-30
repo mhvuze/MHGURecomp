@@ -17,7 +17,14 @@
 #include "config.h"
 #include "rt.h"
 
-#define CONFIG_DEFAULT_VALUES DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 0, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 100, 0, 0, 100, MENU_CONFIRM_ORIGINAL, 1, 0, FSR_NATIVE, 0.8f, 1, 0.9f, 1, FSR_UP_3, UPDATES_ASK, 1, 1.0f, 0, COMBO_LENIENT, "", "", "/", FXAA_ORIGINAL, 0
+#include "keymap.h"
+
+#define DEFAULT_BINDS {{SDL_SCANCODE_W}, {SDL_SCANCODE_S}, {SDL_SCANCODE_A}, {SDL_SCANCODE_D}, {SDL_SCANCODE_LSHIFT},     \
+    {KEY_MOUSE + SDL_BUTTON_RIGHT}, {SDL_SCANCODE_SPACE}, {KEY_MOUSE + SDL_BUTTON_LEFT}, {SDL_SCANCODE_R},              \
+    {SDL_SCANCODE_Q}, {SDL_SCANCODE_E}, {SDL_SCANCODE_TAB}, {SDL_SCANCODE_T}, {SDL_SCANCODE_RETURN, SDL_SCANCODE_KP_ENTER}, \
+    {SDL_SCANCODE_BACKSPACE}, {SDL_SCANCODE_UP}, {SDL_SCANCODE_DOWN}, {SDL_SCANCODE_LEFT}, {SDL_SCANCODE_RIGHT},          \
+    {SDL_SCANCODE_LCTRL, SDL_SCANCODE_RCTRL}, {SDL_SCANCODE_LALT, SDL_SCANCODE_RALT}}
+#define CONFIG_DEFAULT_VALUES DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 0, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 100, 0, 0, 100, MENU_CONFIRM_ORIGINAL, 1, 0, FSR_NATIVE, 0.8f, 1, 0.9f, 1, FSR_UP_3, UPDATES_ASK, 1, 1.0f, 0, COMBO_LENIENT, "", "", "/", FXAA_ORIGINAL, 0, DEFAULT_BINDS
 Config g_config = {CONFIG_DEFAULT_VALUES};
 Config config_defaults(void) { Config c = {CONFIG_DEFAULT_VALUES}; return c; }
 uint32_t g_render_size[2] = {1920, 1080};
@@ -166,6 +173,33 @@ static const char DEFAULT_INI[] =
     "; Default: 1.0\n"
     "MouseSensitivity = 1.0\n"
     "\n"
+    "[Keybinds]\n"
+    "; The keys or mouse buttons for each Switch button and for moving (the left stick).\n"
+    "; Up to two each, separated by a comma, or None.\n"
+    "; Mouse buttons: Mouse Left, Mouse Right, Mouse Middle, Mouse 4, Mouse 5.\n"
+    "; Esc, Insert, F1 and F7 to F12 are the recomp's own keys.\n"
+    "MoveUp = W\n"
+    "MoveDown = S\n"
+    "MoveLeft = A\n"
+    "MoveRight = D\n"
+    "Walk = Left Shift\n"
+    "A = Mouse Right\n"
+    "B = Space\n"
+    "X = Mouse Left\n"
+    "Y = R\n"
+    "L = Q\n"
+    "R = E\n"
+    "ZL = Tab\n"
+    "ZR = T\n"
+    "Plus = Return, Keypad Enter\n"
+    "Minus = Backspace\n"
+    "DpadUp = Up\n"
+    "DpadDown = Down\n"
+    "DpadLeft = Left\n"
+    "DpadRight = Right\n"
+    "LeftStickClick = Left Ctrl, Right Ctrl\n"
+    "RightStickClick = Left Alt, Right Alt\n"
+    "\n"
     "[Multiplayer]\n"
     "; Which port to host/join hubs on (TCP and UDP)\n"
     "; Default: 39500\n"
@@ -261,6 +295,7 @@ static const char DEFAULT_INI[] =
 // Quest<number> entries, in file order. Values are written into the file as given here. Left out: Upscaler (FSR 4 is
 // AMD's, for Windows) and Updates (there is no mhgurecomp-updater on the Mac).
 #define ONOFF "On|Off"
+#define KEYBIND(key, title) {"Keybinds", "Keybinds", key, title, SETTING_TEXT, NULL, NULL, true, false}
 const SettingRow g_setting_rows[] = {
     {"Display", "Display", "Mode", "Mode", SETTING_CHOICE, "Borderless|Fullscreen|Windowed",
      "Borderless (full screen)|Fullscreen (exclusive)|Windowed", true, true},
@@ -274,6 +309,8 @@ const SettingRow g_setting_rows[] = {
      "Center (16:9)|Edges|21:9|32:9", false, true},
     {"Graphics", "Anti-aliasing", "MSAA", "MSAA", SETTING_CHOICE, "Off|2x|4x|8x", NULL, true, true},
     {"Graphics", "Anti-aliasing", "FXAA", "FXAA", SETTING_CHOICE, ONOFF, NULL, true, true},
+    {"Graphics", "Anti-aliasing", "FXAAMode", "FXAA Type", SETTING_CHOICE, "Original|3_11", "Original (the game's)|FXAA 3.11",
+     true, true},
     {"Graphics", "Upscaler", "FSR", "FSR 3.1 Upscaler", SETTING_CHOICE, ONOFF, NULL, false, true},
     {"Graphics", "Upscaler", "FSRQuality", "FSR Quality", SETTING_CHOICE, "NativeAA|Quality|Balanced|Performance|UltraPerformance",
      "Native AA|Quality (1.5x)|Balanced (1.7x)|Performance (2x)|Ultra Performance (3x)", false, true},
@@ -281,6 +318,8 @@ const SettingRow g_setting_rows[] = {
     {"Graphics", "Upscaler", "ObjectMotion", "FSR Object Motion", SETTING_CHOICE, ONOFF, NULL, false, false},
     {"Graphics", "Upscaler", "Reactive", "FSR Reactive Mask", SETTING_VALUE, "0|0.5|0.7|0.9|1.0", NULL, false, false},
     {"Graphics", "Upscaler", "AnimSurf", "FSR Animated Surfaces", SETTING_CHOICE, ONOFF, NULL, false, false},
+    {"Graphics", "Graphics", "DrawDistance", "Draw Distance (People in Towns)", SETTING_VALUE, "0|0.5|1.0|1.5|2.0|3.0", NULL,
+     true, true},
     {"Graphics", "Graphics", "SmoothGradients", "Smooth Gradients", SETTING_CHOICE, ONOFF, NULL, true, true},
     {"Graphics", "Performance", "FPS", "Frame Rate Cap", SETTING_VALUE, "30|60|90|120|144|240", NULL, true, true},
     {"Graphics", "Performance", "VSync", "VSync", SETTING_CHOICE, ONOFF, NULL, true, true},
@@ -290,7 +329,30 @@ const SettingRow g_setting_rows[] = {
     {"Controls", "Controls", "MenuConfirm", "Confirm in the F1 Menu", SETTING_CHOICE, "Original|South|East",
      "As in the Game|South (bottom button)|East (right button)", true, false},
     {"Controls", "Controls", "BackgroundInput", "Controller in the Background", SETTING_CHOICE, ONOFF, NULL, true, true},
+    {"Controls", "Controls", "ComboInputWindow", "Two-Button Inputs", SETTING_CHOICE, "Lenient|Strict", NULL, true, false},
+    {"Controls", "Controls", "ChatKey", "Chat Key", SETTING_VALUE, "/|T|Y|Return", NULL, true, false},
     {"Controls", "Mouse", "MouseSensitivity", "Mouse Sensitivity", SETTING_VALUE, "0.5|0.75|1.0|1.5|2.0|3.0", NULL, true, true},
+    KEYBIND("MoveUp", "Move Up"),
+    KEYBIND("MoveDown", "Move Down"),
+    KEYBIND("MoveLeft", "Move Left"),
+    KEYBIND("MoveRight", "Move Right"),
+    KEYBIND("Walk", "Walk"),
+    KEYBIND("A", "A"),
+    KEYBIND("B", "B"),
+    KEYBIND("X", "X"),
+    KEYBIND("Y", "Y"),
+    KEYBIND("L", "L"),
+    KEYBIND("R", "R"),
+    KEYBIND("ZL", "ZL"),
+    KEYBIND("ZR", "ZR"),
+    KEYBIND("Plus", "Plus"),
+    KEYBIND("Minus", "Minus"),
+    KEYBIND("DpadUp", "D-pad Up"),
+    KEYBIND("DpadDown", "D-pad Down"),
+    KEYBIND("DpadLeft", "D-pad Left"),
+    KEYBIND("DpadRight", "D-pad Right"),
+    KEYBIND("LeftStickClick", "Left Stick Click"),
+    KEYBIND("RightStickClick", "Right Stick Click"),
     {"Multiplayer", "Multiplayer", "Port", "Port", SETTING_VALUE, "39500", NULL, false, false},
     {"Multiplayer", "Multiplayer", "Join", "Join Addresses", SETTING_TEXT, NULL, NULL, true, false},
     {"Multiplayer", "Multiplayer", "Server", "Hub Server", SETTING_TEXT, NULL, NULL, true, false},
@@ -304,6 +366,7 @@ const SettingRow g_setting_rows[] = {
     {"Multiplayer", "Village Quests", "HubHP", "Village Quest HP in the Hub", SETTING_VALUE, "1.0|1.5|2.0|3.0", NULL, true, false},
     {"Extras", "Bonus Content", "BonusContent", "Bonus Content", SETTING_CHOICE, ONOFF, NULL, false, true},
     {"Extras", "Audio", "Volume", "Volume", SETTING_VALUE, "0|25|50|75|100", NULL, true, true},
+    {"Extras", "Audio", "MuteInBackground", "Mute in the Background", SETTING_CHOICE, ONOFF, NULL, true, true},
     {"Extras", "Application", "ConfirmExit", "Ask Before Closing", SETTING_CHOICE, ONOFF, NULL, true, true},
     {"Extras", "Application", "Language", "F1 Menu Language", SETTING_CHOICE, "English|Spanish", "English|Español", true, false},
     {"Extras", "Application", "ButtonIcons", "F1 Menu Button Icons", SETTING_CHOICE, "Xbox|Switch|PlayStation", NULL, true,
@@ -406,8 +469,10 @@ static bool parse_aspect(const char *v, float *out) {
 #define ERR_LANGUAGE "Invalid menu language."
 #define ERR_UPDATES "Invalid update setting."
 #define ERR_DRAW "Draw distance must be 0-10 (0: no limit)."
+#define ERR_KEYS "Invalid keybind."
 #define F(x) offsetof(Config, x)
 #define ON_OFF(section, key, field, restart) {section, key, SET_BOOL, F(field), 0, 0, 0, NULL, NULL, restart, ERR_TOGGLE}
+#define KEYS(key, bind) {"Keybinds", key, SET_KEYS, F(binds[bind]), 0, 0, 0, NULL, NULL, false, ERR_KEYS}
 static const int anchor_values[] = {UI_CENTER, UI_21_9, UI_32_9, UI_EDGES}, msaa_values[] = {1, 2, 4, 8};
 const ConfigSetting g_settings[] = {
     {"Display", "Mode", SET_CHOICE, F(display_mode), 0, 0, 0,
@@ -441,6 +506,12 @@ const ConfigSetting g_settings[] = {
     {"Controls", "ComboInputWindow", SET_CHOICE, F(combo_window), 0, 0, 0, "Lenient,Strict", NULL, false, ERR_MISC},
     {"Controls", "ChatKey", SET_TEXT, F(chat_key), sizeof g_config.chat_key, 0, 0, NULL, NULL, false, ERR_MISC},
     {"Mouse", "MouseSensitivity", SET_FLOAT, F(mouse_sensitivity), 0, 0.1f, 10.0f, NULL, NULL, false, ERR_VIEW},
+    KEYS("MoveUp", BIND_MOVE_UP), KEYS("MoveDown", BIND_MOVE_DOWN), KEYS("MoveLeft", BIND_MOVE_LEFT),
+    KEYS("MoveRight", BIND_MOVE_RIGHT), KEYS("Walk", BIND_WALK), KEYS("A", BIND_A), KEYS("B", BIND_B), KEYS("X", BIND_X),
+    KEYS("Y", BIND_Y), KEYS("L", BIND_L), KEYS("R", BIND_R), KEYS("ZL", BIND_ZL), KEYS("ZR", BIND_ZR),
+    KEYS("Plus", BIND_PLUS), KEYS("Minus", BIND_MINUS), KEYS("DpadUp", BIND_DPAD_UP), KEYS("DpadDown", BIND_DPAD_DOWN),
+    KEYS("DpadLeft", BIND_DPAD_LEFT), KEYS("DpadRight", BIND_DPAD_RIGHT), KEYS("LeftStickClick", BIND_LSTICK),
+    KEYS("RightStickClick", BIND_RSTICK),
     {"Multiplayer", "Port", SET_INT, F(ldn_port), 0, 1, 65535, NULL, NULL, true, ERR_NET},
     {"Multiplayer", "Join", SET_TEXT, F(ldn_join), sizeof g_config.ldn_join, 0, 0, NULL, NULL, true, ERR_NET},
     {"Multiplayer", "Server", SET_TEXT, F(ldn_server), sizeof g_config.ldn_server, 0, 0, NULL, NULL, false, ERR_SERVER},
@@ -462,8 +533,39 @@ const ConfigSetting g_settings[] = {
     {"Application", "Updates", SET_CHOICE, F(updates), 0, 0, 0, "Ask,Auto|automatic,Off|never", NULL, false, ERR_UPDATES},
 };
 #undef ON_OFF
-#undef F
+#undef KEYS
 const int g_nsettings = (int)(sizeof g_settings / sizeof g_settings[0]);
+
+const ConfigSetting *config_bind_setting(int bind) {
+    for (int i = 0; i < g_nsettings; i++)
+        if (g_settings[i].kind == SET_KEYS && g_settings[i].field == F(binds[bind])) return &g_settings[i];
+    return NULL;
+}
+#undef F
+
+// [Keybinds] names: SDL's for a key, but its own for the ones whose name has a ',' (the list's separator) or a
+// ';' / '#' (a comment in the file), and for the mouse buttons
+static const struct { int code; const char *name; } key_names[] = {
+    {SDL_SCANCODE_COMMA, "Comma"}, {SDL_SCANCODE_KP_COMMA, "Keypad Comma"}, {SDL_SCANCODE_SEMICOLON, "Semicolon"},
+    {SDL_SCANCODE_KP_HASH, "Keypad Hash"}, {KEY_MOUSE + SDL_BUTTON_LEFT, "Mouse Left"},
+    {KEY_MOUSE + SDL_BUTTON_RIGHT, "Mouse Right"}, {KEY_MOUSE + SDL_BUTTON_MIDDLE, "Mouse Middle"},
+    {KEY_MOUSE + SDL_BUTTON_X1, "Mouse 4"}, {KEY_MOUSE + SDL_BUTTON_X2, "Mouse 5"},
+};
+const char *config_key_name(int code) {
+    for (size_t i = 0; i < sizeof key_names / sizeof *key_names; i++)
+        if (key_names[i].code == code) return key_names[i].name;
+    const char *n = code > 0 && code < SDL_SCANCODE_COUNT ? SDL_GetScancodeName((SDL_Scancode)code) : "";
+    return n && !strpbrk(n, ",;#") ? n : "";
+}
+int config_key_code(const char *name) {
+    if (!*name) return 0;
+    for (size_t i = 0; i < sizeof key_names / sizeof *key_names; i++)
+        if (!strcasecmp(key_names[i].name, name)) return key_names[i].code;
+    SDL_Scancode sc = SDL_GetScancodeFromName(name);
+    return sc != SDL_SCANCODE_UNKNOWN && *config_key_name((int)sc) ? (int)sc : 0;
+}
+// One of a [Keybinds] row's keys: a key or button with a name, not one the recomp keeps for itself (keymap.h)
+static bool bind_key_valid(int code) { return !code || (*config_key_name(code) && !key_reserved(code)); }
 
 // Is name (squashed) one of the '|'-separated spellings in list (from list, up to its end or a ',')? With *index, the
 // number of the ','-separated item it matched.
@@ -558,6 +660,25 @@ bool config_parse(const ConfigSetting *s, const char *value, Config *c) {
     case SET_TEXT:  // (as written: host names keep their dashes)
         snprintf((char *)c + s->field, s->field2, "%s", value);
         return true;
+    case SET_KEYS: {  // names separated by ',' ("Return, Keypad Enter"), or None
+        int keys[BIND_KEYS] = {0}, n = 0;
+        if (strcmp(v, "none") && *v)
+            for (const char *p = value;; p++) {
+                size_t len = strcspn(p, ",");
+                char one[64];
+                snprintf(one, sizeof one, "%.*s", (int)len, p);
+                char *a = one, *b = one + strlen(one);
+                while (isspace((unsigned char)*a)) a++;
+                while (b > a && isspace((unsigned char)b[-1])) *--b = 0;
+                int code = config_key_code(a);
+                if (!code || !bind_key_valid(code) || n == BIND_KEYS) return false;
+                if (!n || keys[0] != code) keys[n++] = code;
+                p += len;
+                if (!*p) break;
+            }
+        memcpy(field_int(c, s->field), keys, sizeof keys);
+        return true;
+    }
     }
     return false;
 }
@@ -585,6 +706,15 @@ void config_format(const ConfigSetting *s, const Config *c, char *buf, size_t si
         else snprintf(buf, size, "%g", (double)fv);
         break;
     case SET_TEXT: snprintf(buf, size, "%s", (const char *)c + s->field); break;
+    case SET_KEYS: {
+        const int *k = field_int(c, s->field);
+        size_t n = 0;
+        if (size) *buf = 0;
+        for (int i = 0; i < BIND_KEYS; i++)
+            if (k[i] && n < size) n += (size_t)snprintf(buf + n, size - n, "%s%s", n ? ", " : "", config_key_name(k[i]));
+        if (!n) snprintf(buf, size, "None");
+        break;
+    }
     }
 }
 
@@ -619,6 +749,12 @@ bool config_valid(const ConfigSetting *s, const Config *c) {
         const char *t = (const char *)c + s->field;
         return memchr(t, 0, s->field2) && !strpbrk(t, "\r\n;#");
     }
+    case SET_KEYS: {
+        const int *k = field_int(c, s->field);
+        for (int i = 0; i < BIND_KEYS; i++)
+            if (!bind_key_valid(k[i])) return false;
+        return true;
+    }
     }
     return false;
 }
@@ -632,6 +768,7 @@ bool config_equal(const ConfigSetting *s, const Config *a, const Config *b) {
         return *field_int(a, s->field) == *field_int(b, s->field) &&
                *field_int(a, s->field2) == *field_int(b, s->field2);
     case SET_TEXT: return !strcmp((const char *)a + s->field, (const char *)b + s->field);
+    case SET_KEYS: return !memcmp(field_int(a, s->field), field_int(b, s->field), sizeof(int) * BIND_KEYS);
     default: return *field_int(a, s->field) == *field_int(b, s->field);
     }
 }
