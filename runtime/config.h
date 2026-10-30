@@ -114,6 +114,7 @@ bool config_valid(const ConfigSetting *s, const Config *c);
 bool config_equal(const ConfigSetting *s, const Config *a, const Config *b);
 bool config_restart_key(const char *key);  // the setting takes effect at the next start
 bool config_range(const char *key, float *min, float *max);  // a number setting's range
+bool config_help(const char *key, char *buf, size_t size);  // what the default ini's comments say of it (the menu's help)
 
 // File values, before environment overrides and automatic resolution are resolved.
 void config_store_loaded(const Config *config);
@@ -171,8 +172,6 @@ bool config_restart_pending(const char *key);  // its value in the file differs 
 bool config_set(const char *key, const char *value);
 bool config_check(const char *key, const char *value);  // a value the setting takes? (g_config unchanged)
 bool config_live(const char *key);  // takes effect at once
-// The explanation the default file gives a setting (its comment lines), into buf. "Quest": the per-quest entries'.
-bool config_help(const char *key, char *buf, size_t size);
 // The Quest<number> entries of the file, in order: fn(quest number, value, ctx) for each.
 void config_quests(void (*fn)(unsigned quest, const char *value, void *ctx), void *ctx);
 bool config_remove(const char *key);  // removes a Quest<number> entry (from the file, and from g_config)

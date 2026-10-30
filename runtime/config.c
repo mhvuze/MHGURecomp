@@ -641,6 +641,53 @@ bool config_range(const char *key, float *min, float *max) {
     return true;
 }
 
+// What DEFAULT_INI says of a setting: the comment lines above its key (keys right below one another, 1Player..4Players,
+// share them). A line wrapped in the file is joined to the one before (that one long, not ending a sentence);
+// "Default: x" goes last, left out when x is empty.
+bool config_help(const char *key, char *buf, size_t size) {
+    const char *p = DEFAULT_INI, *block = NULL;  // block: the comment lines that go with the next key
+    bool after_key = false;
+    size_t klen = strlen(key);
+    while (*p) {
+        const char *end = strchr(p, '\n');
+        if (!end) end = p + strlen(p);
+        if (*p == ';') {
+            if (!block || after_key) block = p;
+            after_key = false;
+        } else if (p == end || *p == '[') {
+            block = NULL, after_key = false;
+        } else {
+            after_key = true;
+            if (block && (size_t)(end - p) > klen && !strncmp(p, key, klen) && (p[klen] == ' ' || p[klen] == '=')) break;
+        }
+        p = *end ? end + 1 : end;
+    }
+    if (!*p || !block || !size) return false;
+    size_t n = 0;
+    char dflt[128] = "", prev[256] = "";
+    *buf = 0;
+    for (const char *l = block; *l == ';';) {
+        const char *end = strchr(l, '\n');
+        char line[256];
+        snprintf(line, sizeof line, "%.*s", (int)(end - l - 1), l + 1);
+        const char *t = line + (*line == ' ');
+        if (!strncmp(t, "Default:", 8)) {
+            snprintf(dflt, sizeof dflt, "%s", t + 8 + (t[8] == ' '));
+        } else {
+            size_t pl = strlen(prev);
+            bool list = strchr(t, ',') != NULL;  // (the values it takes, "Off, 2x, 4x": a line of its own)
+            for (const char *c = t; *c && list; c++) list = *c != ' ' || c[-1] == ',';
+            bool join = pl >= 80 && !strchr(".!?:)", prev[pl - 1]) && strncmp(t, "Between ", 8) && !list;
+            if (n) n += (size_t)snprintf(buf + n, n < size ? size - n : 0, "%s", join ? " " : "\n");
+            n += (size_t)snprintf(buf + n, n < size ? size - n : 0, "%s", t);
+            snprintf(prev, sizeof prev, "%s", line);
+        }
+        l = end + 1;
+    }
+    if (*dflt) n += (size_t)snprintf(buf + n, n < size ? size - n : 0, "%sDefault: %s", n ? "\n" : "", dflt);
+    return n > 0;
+}
+
 static int desktop_w, desktop_h;
 static bool render_auto = true;
 
@@ -967,33 +1014,6 @@ bool config_check(const char *key, const char *value) {
     if ((r->kind == SETTING_VALUE || r == &quest_row) && strchr(value, '-')) return false;
     static Config parsed;  // (the parser is the judge)
     return parse_into(key, value, &parsed);
-}
-bool config_help(const char *key, char *buf, size_t size) {
-    // The comment lines right above "<key> =" in DEFAULT_INI; for a key it has no line for (Quest<number>), the
-    // comment block that names it.
-    char block[2048] = "", line[512], val[256];
-    size_t n = 0;
-    buf[0] = 0;
-    for (const char *p = DEFAULT_INI; *p;) {
-        const char *e = strchr(p, '\n');
-        snprintf(line, sizeof line, "%.*s", (int)(e ? e - p : (long)strlen(p)), p);
-        p = e ? e + 1 : p + strlen(p);
-        if (line[0] == ';') {
-            const char *c = line + 1;
-            while (*c == ' ') c++;  // (and a continuation line's indent)
-            bool dflt = !strncmp(c, "Default:", 8);  // (on a line of its own; none when it names no value)
-            if (dflt && !c[8 + strspn(c + 8, " ")]) continue;
-            n += snprintf(block + n, n < sizeof block ? sizeof block - n : 0, "%s%s", !n ? "" : dflt ? "\n" : " ", c);
-            if (n >= sizeof block) n = sizeof block - 1;
-            continue;
-        }
-        if (line_value(line, key, val, sizeof val) || (block[0] && strstr(block, key) && !strcmp(key, "Quest"))) {
-            snprintf(buf, size, "%s", block);
-            return block[0] != 0;
-        }
-        block[0] = 0, n = 0;
-    }
-    return false;
 }
 
 void config_quests(void (*fn)(unsigned quest, const char *value, void *ctx), void *ctx) {
