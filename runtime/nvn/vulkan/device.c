@@ -21,6 +21,17 @@
 
 VkG g_vk;
 static VkDebugUtilsMessengerEXT messenger;
+// Windows: the swapchain says it never wants exclusive full screen (VK_EXT_full_screen_exclusive). Otherwise NVIDIA's
+// driver takes a borderless window covering the screen into exclusive mode, and alt-tab or F11 then blacks out the
+// monitor until its "Vulkan/OpenGL present method" is set to "Prefer layered on DXGI Swapchain" (issue #100).
+// VkSurfaceFullScreenExclusiveInfoEXT and its enum live in vulkan_win32.h, which needs windows.h: the same layout here.
+typedef struct {
+    VkStructureType sType;
+    void *pNext;
+    int32_t fullScreenExclusive;  // VkFullScreenExclusiveEXT
+} FullScreenExclusiveInfo;
+enum { FULL_SCREEN_EXCLUSIVE_DISALLOWED = 2 };  // VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT
+static bool surface_caps2, no_exclusive;  // VK_KHR_get_surface_capabilities2 (instance), VK_EXT_full_screen_exclusive
 
 static pthread_mutex_t g_vk_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t volatile g_vk_owner;  // who holds it: exit() may run inside a submission, from the guest's own code
@@ -70,6 +81,14 @@ static void create_instance(void) {
     // MoltenVK is a "portability" driver: the loader lists it only for an instance that asks for those.
     ext[n_ext++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
 #endif
+    uint32_t ni = 0;  // VK_EXT_full_screen_exclusive (create_device) needs this one
+    vkEnumerateInstanceExtensionProperties(NULL, &ni, NULL);
+    VkExtensionProperties *ip = calloc(ni ? ni : 1, sizeof *ip);
+    vkEnumerateInstanceExtensionProperties(NULL, &ni, ip);
+    for (uint32_t i = 0; i < ni; i++)
+        if (!strcmp(ip[i].extensionName, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME)) surface_caps2 = true;
+    free(ip);
+    if (surface_caps2) ext[n_ext++] = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME;
     bool validate = getenv("MHGU_VK_VALIDATION") != NULL;
     if (validate) ext[n_ext++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
@@ -162,6 +181,8 @@ static void create_device(void) {
     // A device that advertises VK_KHR_portability_subset (MoltenVK) must have it enabled.
     g_vk.portability = has_ext(ep, ne, "VK_KHR_portability_subset");
     if (g_vk.portability) ext[n_ext++] = "VK_KHR_portability_subset";
+    no_exclusive = surface_caps2 && has_ext(ep, ne, "VK_EXT_full_screen_exclusive") && !getenv("MHGU_VK_EXCLUSIVE");
+    if (no_exclusive) ext[n_ext++] = "VK_EXT_full_screen_exclusive";
     bool fsr4 = g_config.fsr && g_config.fsr_upscaler == FSR_UP_4 && vk_fsr4_device_exts(ep, ne, ext, &n_ext);  // FSR 4: its extensions
     free(ep);
 
@@ -228,8 +249,8 @@ static void create_device(void) {
                              .pQueueCreateInfos = &qi, .enabledExtensionCount = n_ext, .ppEnabledExtensionNames = ext};
     VK_CHECK(vkCreateDevice(g_vk.phys, &di, NULL, &g_vk.dev));
     vkGetDeviceQueue(g_vk.dev, g_vk.qfam, 0, &g_vk.queue);
-    LOG("[vk] features: divisor %d, custom border %d, BC %d, ASTC %d\n", g_vk.divisor, g_vk.custom_border,
-        h->textureCompressionBC, h->textureCompressionASTC_LDR);
+    LOG("[vk] features: divisor %d, custom border %d, BC %d, ASTC %d, exclusive full screen off %d\n", g_vk.divisor,
+        g_vk.custom_border, h->textureCompressionBC, h->textureCompressionASTC_LDR, no_exclusive);
 
     // MSAA (settings): as many samples as asked for that colour and depth attachments both support and shaders can
     // read from depth (its resolve is a shader: exec.c vk_ms_resolve)
@@ -316,12 +337,15 @@ void vk_set_msaa(uint32_t n) {
 }
 
 // ================================================================== swapchain
+static int swapchain_vsync = -1;
+static int configured_msaa = -1;
 static VkPresentModeKHR present_mode(void) {
+    swapchain_vsync = config_live_vsync();
     // MAILBOX by default: no tearing, and the game paces itself (its own 30 fps vsync waits); with FIFO the game's frames
     // also queued behind the display's, dropping to ~26 fps on the R9. FIFO where there is no mailbox.
     const char *e = getenv("MHGU_VK_PRESENT"), *v = getenv("MHGU_VSYNC");
     if (!e && v) e = atoi(v) ? "fifo" : "immediate";
-    if (!e) e = g_config.vsync ? "mailbox" : "immediate";  // (mhgurecomp.ini VSync)
+    if (!e) e = swapchain_vsync ? "mailbox" : "immediate";  // (mhgurecomp.ini VSync)
     VkPresentModeKHR want = !strcmp(e, "fifo") ? VK_PRESENT_MODE_FIFO_KHR
                           : !strcmp(e, "immediate") ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
     uint32_t n = 0;
@@ -366,6 +390,9 @@ static void create_swapchain(void) {
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = caps.currentTransform,
         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, .presentMode = present_mode(), .clipped = VK_TRUE,
         .oldSwapchain = old};
+    FullScreenExclusiveInfo fse = {.sType = VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT,
+                                   .fullScreenExclusive = FULL_SCREEN_EXCLUSIVE_DISALLOWED};
+    if (no_exclusive) ci.pNext = &fse;
     VK_CHECK(vkCreateSwapchainKHR(g_vk.dev, &ci, NULL, &g_vk.swapchain));
     for (uint32_t i = 0; i < g_vk.sc_count; i++) {
         vkDestroyFramebuffer(g_vk.dev, sc_fb[i], NULL);
@@ -446,6 +473,11 @@ static bool frame_begin(void) {
     int w, h;
     SDL_GetWindowSizeInPixels(ui_window(), &w, &h);
     if (!w || !h) return false;  // minimised
+    // All GPU mutations happen here under vk_lock(), after resolving the old
+    // scene. Existing attachment caches defer old image destruction safely.
+    int msaa = config_live_msaa();
+    if (configured_msaa < 0) configured_msaa = g_config.msaa;
+    if (msaa != configured_msaa) { vk_set_msaa((uint32_t)msaa); configured_msaa = msaa; }
     // Recreate once the window has held its new pixel size for a few frames: during a full-screen switch or a live
     // resize it changes every frame, each recreation waits for the GPU, and on macOS SDL's size and the Metal layer's
     // (MoltenVK's currentExtent) disagree until the animation ends - leaving full screen recreated it 85 frames in a
@@ -453,7 +485,9 @@ static bool frame_begin(void) {
     static int last_w, last_h, held;
     if (w != last_w || h != last_h) last_w = w, last_h = h, held = 0;
     else if (held < 3) held++;
-    if (!g_vk.swapchain || (held >= 3 && (sc_stale || w != sc_req_w || h != sc_req_h))) recreate_swapchain();
+    if (!g_vk.swapchain || config_live_vsync() != swapchain_vsync ||
+        (held >= 3 && (sc_stale || w != sc_req_w || h != sc_req_h)))
+        recreate_swapchain();
     if (!g_vk.swapchain) return false;
     slot = (slot + 1) % FRAMES;
     if (!acquire_sem[slot]) acquire_sem[slot] = binary_semaphore();
@@ -619,6 +653,11 @@ void backend_present(NvnTexture *t) {
             if (--left > 0) { g_dump_frame++; g_dump_no = 0; }
             else g_dump_active = 0;
         } else if (g_dump_request) { left = g_dump_request; g_dump_request = 0; g_dump_no = 0; g_dump_frame = 0; g_dump_active = 1; }
+    }
+    {   // (debug) MHGU_CONTROL "hudtrace": the next whole frame's HUD quads (exec.c cbuf_info)
+        extern volatile int g_hudtrace_active, g_hudtrace_request;
+        if (g_hudtrace_active) { LOG("[hud] frame done\n"); g_hudtrace_active--; }  // (2: the frame recorded next may run late)
+        else if (g_hudtrace_request) { g_hudtrace_request = 0; g_hudtrace_active = 2; }
     }
     { void vk_gpuprof_frame(void); vk_gpuprof_frame(); }  // (debug) MHGU_CONTROL "gpuprof"
     vk_unlock();

@@ -3,15 +3,18 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef __APPLE__
 #include <sys/stat.h>
-#endif
 
 #include "camera_jitter.h"
 #include "gamelib.h"
 #include "hle.h"
 #include "kernel.h"
 #include "mods.h"
+#include "app_actions.h"
+
+#ifndef MHGU_VERSION
+#define MHGU_VERSION "unknown"  // (the Makefile gives the build's release: VERSION)
+#endif
 
 const char *g_game_dir = "game";  // folder holding exefs/ and romfs/ (the player's own dump)
 
@@ -28,7 +31,10 @@ static void module_init(Cpu *c, Module *m) {
         }
 }
 static void rtld_init_sdk(Cpu *c) { module_init(c, &g_modules[1]); }
-static void rtld_init_main(Cpu *c) { module_init(c, &g_modules[0]); }
+static void rtld_init_main(Cpu *c) {  // (then the mods' subsdks, in the order rtld loads them: after main)
+    module_init(c, &g_modules[0]);
+    for (int i = 2; i < g_nexefs; i++) module_init(c, &g_modules[i]);
+}
 
 // Claim the guest window before anything else can map there.
 __attribute__((constructor(101))) static void reserve_guest_space(void) {
@@ -47,6 +53,7 @@ static void boot(const char *root) {
     loader_load(exefs);
     kernel_init();
     dispatch_init();
+    mods_patch_code();  // (the mods' patches of the game's code: runtime/mods.c)
     forge_init();  // (Forge plugins in the mods: runtime/forge.c)
     hpscale_init();  // (large monster HP by the number of hunters: runtime/hle/hpscale.c)
     villagehub_init();  // (Village quests at the Hub / Pub counter: runtime/hle/villagehub.c)
@@ -54,6 +61,7 @@ static void boot(const char *root) {
     quickhunt_init();  // (debug, MHGU_QUICKHUNT: runtime/hle/quickhunt.c)
     camjit_init();  // (FSR: the main camera and its jitter: runtime/hle/camera_jitter.c)
     emtrace_init();  // (debug, MHGU_EMTRACE: runtime/hle/emtrace.c)
+    kotrace_init();  // (debug, MHGU_KOTRACE: runtime/hle/kotrace.c)
     cheats_init();  // (cheat codes from cheats/: runtime/cheats.c)
 
     uint32_t stack_size = 0x100000;
@@ -78,6 +86,13 @@ static void boot(const char *root) {
 }
 
 int main(int argc, char **argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (!strncmp(argv[i], "--recomp-wait=", 14)) {
+            char *end; unsigned long pid = strtoul(argv[i] + 14, &end, 10);
+            if (!pid || *end || !plat_wait_process(pid)) return 1;
+        }
+    }
+    ui_capture_launch_args(argc, argv);
     plat_init();
     setvbuf(stderr, NULL, _IONBF, 0);
     bool given = false;
@@ -146,11 +161,38 @@ int main(int argc, char **argv) {
             plat_error_box(msg);
             return 1;
         }
+        // an incomplete romfs starts, then crashes or quits with the game's own error: players' dumps of the base game
+        // without the update merged (34149 files) or of the update alone (12 files, no shader package) did. 1.4.0
+        // merged has 35531; the margin is for dump tools that leave out a few. MHGU_ROMFS_ANY=1 skips the check.
+        char romfs[1200], shaders[1300];
+        snprintf(romfs, sizeof romfs, "%s/romfs", data);
+        snprintf(shaders, sizeof shaders, "%s/nativeNX/system/app_shader/AppShaderPackage.mfx", romfs);
+        struct stat st;
+        int nfiles = getenv("MHGU_ROMFS_ANY") ? -1 : plat_count_files(romfs);
+        bool have_shaders = stat(shaders, &st) == 0;
+        if (nfiles >= 0 && (nfiles < 35000 || !have_shaders)) {
+            char msg[700];
+#ifdef __APPLE__
+            snprintf(msg, sizeof msg, "The game files in data/romfs are incomplete: %d files, where Monster Hunter "
+                     "Generations Ultimate 1.4.0 has 35531%s. Extract the romfs again with the 1.4.0 update applied (the "
+                     "base game's files with the update's merged over them) and replace data/romfs with it.", nfiles,
+                     !have_shaders ? ", and nativeNX/system/app_shader/AppShaderPackage.mfx is missing" : "");
+#else
+            snprintf(msg, sizeof msg, "The game files in data\\romfs are incomplete: %d files, where Monster Hunter "
+                     "Generations Ultimate 1.4.0 has 35531%s. Extract the romfs again with the 1.4.0 update applied (the "
+                     "base game's files with the update's merged over them) and replace data\\romfs with it.", nfiles,
+                     !have_shaders ? ", and nativeNX\\system\\app_shader\\AppShaderPackage.mfx is missing" : "");
+#endif
+            fprintf(stderr, "%s\n", msg);
+            plat_error_box(msg);
+            return 1;
+        }
 #ifdef __APPLE__
         // a release app carries no game code: it builds it from these files on the player's Mac, once
         if (plat_in_app_bundle() && !plat_gamecode_ready(data)) return 1;
 #endif
     }
+    LOG("MHGU Recomp %s\n", MHGU_VERSION);
     { void fnprof_init(void); fnprof_init(); }
     crash_handler_install();
     ui_init();

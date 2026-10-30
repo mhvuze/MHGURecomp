@@ -15,6 +15,7 @@
 #include <cfloat>
 #include <cstdio>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "imgui.h"
@@ -27,7 +28,10 @@ static void ImGui_ImplVulkan_UpdateTexture(ImTextureData *) {}
 #endif
 
 #include "forge.h"
+#include "menu_confirm.h"
 #include "overlay.h"
+#include "hle/chat.h"
+#include "settings_panel.h"
 
 #define LOG(...) fprintf(stderr, __VA_ARGS__)
 
@@ -42,6 +46,7 @@ static std::atomic<bool> g_forge_frames;  // forge.c's frame hook builds the fra
 static std::mutex g_status_lock;
 static char g_status[160];
 static std::atomic<bool> g_status_on;
+static std::atomic<bool> g_settings_open, g_forge_open;
 static int g_menu_key;
 static float g_font_size;
 static ImGuiStyle g_base_style;  // (unscaled; scaled copies follow the window's height)
@@ -127,20 +132,45 @@ static ImGuiKey key_of(SDL_Scancode sc, SDL_Keycode kc) {
 }
 
 static void set_open(bool open) {
-    g_open = open;
+    g_forge_open = open;
+    g_open = open || g_settings_open;
     SDL_Window *w = ui_window();
-    if (open) SDL_ShowCursor();  // (full screen hides it: runtime/ui.c)
+    if (g_open) SDL_ShowCursor();  // (full screen hides it: runtime/ui.c)
     else if (w && (SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN)) SDL_HideCursor();
     Ev e = {};
     e.kind = Ev::CLEAR;  // (keys and buttons held as it opens or closes: released)
     queue(e);
-    LOG("[forge] menu %s\n", open ? "open" : "closed");
+    LOG("[overlay] forge %s, settings %s\n", open ? "open" : "closed", g_settings_open ? "open" : "closed");
+}
+
+static std::atomic<int> g_face_positions[4] = {1, 0, 3, 2};
+void overlay_face_positions(const int positions[4]) {
+    for (int i = 0; i < 4; ++i) g_face_positions[i] = positions[i];
+}
+int overlay_face_position(int semantic) { return g_face_positions[semantic & 3]; }
+void overlay_request_close(void) {
+    settings_panel_request_close();
+    g_settings_open = true;
+    set_open(g_forge_open);
+}
+bool overlay_settings_dirty(void) { return settings_panel_dirty(); }
+void overlay_toggle_settings(void) {
+    if (!g_enabled) return;
+    if (g_settings_open) { settings_panel_request_back(); return; }
+    g_settings_open = true;
+    set_open(g_forge_open);
 }
 
 bool overlay_event(const SDL_Event *e) {
     if (!g_enabled) return false;
+    if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && settings_panel_key((int)e->key.scancode)) return true;
+    if (e->type == SDL_EVENT_MOUSE_BUTTON_DOWN && settings_panel_mouse(e->button.button)) return true;
+    if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && e->key.scancode == SDL_SCANCODE_F1) {
+        overlay_toggle_settings();
+        return true;
+    }
     if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && g_menu_key > 0 && (int)e->key.scancode == g_menu_key) {
-        set_open(!g_open);
+        set_open(!g_forge_open);
         return true;
     }
     if (!g_open) return false;
@@ -229,6 +259,24 @@ static void apply_input(ImGuiIO &io) {
     }
     // the controller (as Forge maps it: A activates, B cancels, the left stick and the d-pad move)
     if (!g_open) pad = {};
+    // Apply only to settings. Forge retains its existing semantic A/B mapping.
+    if (g_settings_open) {
+        int a = overlay_face_position(0), b = overlay_face_position(1);
+        int confirm, cancel;
+        menu_confirm_buttons(config_live_menu_confirm(), a, b, pad.a, pad.b, &confirm, &cancel);
+        pad.a = confirm; pad.b = cancel;
+    }
+    static int last_policy = -1;
+    static bool wait_release, was_settings;
+    if (g_settings_open && !was_settings) wait_release = true;
+    was_settings = g_settings_open;
+    int policy = g_settings_open ? config_live_menu_confirm() : MENU_CONFIRM_ORIGINAL;
+    if (last_policy >= 0 && policy != last_policy) wait_release = true;
+    last_policy = policy;
+    if (wait_release) {
+        if (!pad.a && !pad.b) wait_release = false;
+        pad.a = pad.b = false;
+    }
     io.AddKeyEvent(ImGuiKey_GamepadFaceDown, pad.a);
     io.AddKeyEvent(ImGuiKey_GamepadFaceRight, pad.b);
     io.AddKeyEvent(ImGuiKey_GamepadFaceUp, pad.x);
@@ -358,8 +406,10 @@ void overlay_status(const char *text) {
     g_status_on = g_status[0] != 0;
 }
 
+static bool notice_due(uint64_t now);
+
 void overlay_tick(void) {
-    if (g_forge_frames || (!g_status_on && !g_enabled)) return;
+    if (g_forge_frames || (!g_status_on && !g_enabled && !notice_due(SDL_GetTicksNS()))) return;
     if (!g_enabled) overlay_init(nullptr, 0, 0);  // (ImGui's own font; no menu)
     overlay_frame(nullptr);
 }
@@ -381,6 +431,78 @@ static void draw_status(float scale) {
     dl->AddText(ImGui::GetFont(), size, at, IM_COL32(235, 235, 235, 255), text);
 }
 
+// ------------------------------------------------------------------ notices (any thread -> game thread)
+// A few seconds at the top of the screen, menus open or not (runtime/net/ldn.c: the hub server's failures). Drawn on
+// the foreground draw list: over every window, taking no input or focus.
+static std::mutex g_notice_lock;
+static std::string g_notice_title, g_notice_text;
+static uint64_t g_notice_ns;  // when it came (SDL_GetTicksNS); 0: none
+static const uint64_t NOTICE_NS = 7000000000ull;
+
+void overlay_notice(const char *title, const char *text) {
+    std::lock_guard<std::mutex> l(g_notice_lock);
+    g_notice_title = title ? title : "";
+    g_notice_text = text ? text : "";
+    g_notice_ns = std::max<uint64_t>(SDL_GetTicksNS(), 1);
+}
+
+static bool notice_due(uint64_t now) {
+    std::lock_guard<std::mutex> l(g_notice_lock);
+    if (g_notice_ns && now - g_notice_ns >= NOTICE_NS) g_notice_ns = 0;
+    return g_notice_ns != 0;
+}
+
+static void draw_notice(uint64_t now, float scale) {
+    std::string title, text;
+    uint64_t at;
+    {
+        std::lock_guard<std::mutex> l(g_notice_lock);
+        if (!g_notice_ns) return;
+        title = g_notice_title, text = g_notice_text, at = g_notice_ns;
+    }
+    float age = (now - at) / 1e9f, alpha = std::clamp(std::min(age / .15f, (NOTICE_NS / 1e9f - age) / .5f), 0.f, 1.f);
+    auto color = [alpha](float r, float g, float b, float a) {
+        return ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, a * alpha));
+    };
+    ImGuiViewport *vp = ImGui::GetMainViewport();
+    ImFont *font = ImGui::GetFont();
+    float size = ImGui::GetFontSize() * 1.25f, pad = 10 * scale, bar = 4 * scale, gap = 3 * scale;
+    float wrap = std::min(vp->WorkSize.x * .6f, 620 * scale);
+    ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, wrap, title.c_str());
+    ImVec2 xs = font->CalcTextSizeA(size, FLT_MAX, wrap, text.c_str());
+    float w = std::max(ts.x, xs.x) + bar + 2 * pad, h = ts.y + gap + xs.y + 2 * pad;
+    ImVec2 p0(vp->WorkPos.x + (vp->WorkSize.x - w) * .5f, vp->WorkPos.y + 20 * scale), p1(p0.x + w, p0.y + h);
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    dl->AddRectFilled(p0, p1, color(.025f, .04f, .065f, .92f), 6 * scale);
+    dl->AddRectFilled(p0, ImVec2(p0.x + bar, p1.y), color(1, .72f, .3f, 1), 6 * scale, ImDrawFlags_RoundCornersLeft);
+    ImVec2 at_text(p0.x + bar + pad, p0.y + pad);
+    dl->AddText(font, size, at_text, color(1, .8f, .45f, 1), title.c_str(), nullptr, wrap);
+    dl->AddText(font, size, ImVec2(at_text.x, at_text.y + ts.y + gap), color(.96f, .97f, 1, 1), text.c_str(), nullptr, wrap);
+}
+
+// The line of chat being typed ("/", runtime/hle/chat.c): where the player dragged it (at first above the game's
+// chat window), wrapped
+static void draw_chat(const char *line, uint64_t now, float scale) {
+    ImGuiViewport *vp = ImGui::GetMainViewport();
+    ImFont *font = ImGui::GetFont();
+    float size = ImGui::GetFontSize() * 1.25f, pad = 8 * scale, bar = 4 * scale;
+    std::string text = std::string("Chat: ") + line + ((now / 500000000ull) & 1 ? "_" : " ");
+    float wrap = std::min(vp->WorkSize.x * .45f, 560 * scale);  // (a long line wraps; the box grows upwards)
+    ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, wrap, text.c_str());
+    float w = std::max(ts.x, 320 * scale) + bar + 2 * pad, h = ts.y + 2 * pad;
+    float left, low;
+    chat_position(&left, &low);
+    float bottom = vp->WorkPos.y + vp->WorkSize.y * low;
+    ImVec2 p0(vp->WorkPos.x + vp->WorkSize.x * left, bottom - h), p1(p0.x + w, bottom);
+    chat_set_box((p0.x - vp->WorkPos.x) / vp->WorkSize.x, (p0.y - vp->WorkPos.y) / vp->WorkSize.y,
+                 (p1.x - vp->WorkPos.x) / vp->WorkSize.x, (p1.y - vp->WorkPos.y) / vp->WorkSize.y);
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    dl->AddRectFilled(p0, p1, IM_COL32(6, 10, 17, 235), 6 * scale);
+    dl->AddRectFilled(p0, ImVec2(p0.x + bar, p1.y), IM_COL32(111, 216, 255, 255), 6 * scale, ImDrawFlags_RoundCornersLeft);
+    dl->AddText(font, size, ImVec2(p0.x + bar + pad, p0.y + pad), IM_COL32(244, 247, 252, 255), text.c_str(), nullptr,
+                wrap);
+}
+
 // ------------------------------------------------------------------ frames (game thread)
 static std::mutex g_snap_lock;  // the copy the render thread draws
 static ImDrawData g_snap;
@@ -398,9 +520,14 @@ static void snap_clear(void) {
 void overlay_frame(void *cpu) {
     if (cpu) g_forge_frames = true;
     if (!g_ready) return;
+    if (!g_settings_open) { bool closed = false; settings_panel(&closed); }
     bool open = g_open, free_render = cpu && forge_plugins_have(FORGE_IMGUI_FREE_RENDER), status = g_status_on;
+    uint64_t now = SDL_GetTicksNS();
+    bool notice = notice_due(now);
+    char line[256];
+    bool chat = chat_composing(line, sizeof line);
     ImGuiIO &io = ImGui::GetIO();
-    if (!open && !free_render && !status) {  // (nothing to draw)
+    if (!open && !free_render && !status && !notice && !chat) {  // (nothing to draw)
         std::lock_guard<std::mutex> l(g_snap_lock);
         if (g_snap.Valid) snap_clear();
         apply_input(io);  // (keep the queue short)
@@ -419,7 +546,6 @@ void overlay_frame(void *cpu) {
         style.FontScaleDpi = scale;
         g_scale = scale;
     }
-    uint64_t now = SDL_GetTicksNS();
     io.DeltaTime = g_last_ns ? std::clamp((now - g_last_ns) / 1e9f, 1e-4f, 0.1f) : 1.0f / 30;
     g_last_ns = now;
     apply_input(io);
@@ -429,20 +555,29 @@ void overlay_frame(void *cpu) {
         forge_imgui_init(cpu);
     }
     ImGui_ImplVulkan_NewFrame();
+    settings_panel_before_frame(g_settings_open);
     ImGui::NewFrame();
-    if (open) {
+    bool settings = g_settings_open;
+    settings_panel(&settings);
+    if (settings_panel_confirming()) settings = true;
+    if (settings != g_settings_open) { g_settings_open = settings; set_open(g_forge_open); }
+    if (g_forge_open) {
         bool keep = true;
         ImGui::SetNextWindowPos(ImVec2(40 * scale, 40 * scale), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(420 * scale, 360 * scale), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("forge", &keep)) {
             if (ImGui::CollapsingHeader("About Forge")) {
-                ImGui::Text("Forge API 1.5.1, by the port (MHGU Recomp)");
-                ImGui::SeparatorText("Forge developers");
+                ImGui::Text("Version: %s", "1.5.1");
+                ImGui::SeparatorText("Developers");
                 ImGui::BulletText("Fexty");
                 ImGui::BulletText("jeffi2287");
-                ImGui::SeparatorText("Libraries used");
-                ImGui::BulletText("Dear ImGui %s", IMGUI_VERSION);
-                ImGui::BulletText("cimgui");
+
+                ImGui::SeparatorText("Libraries Used");
+                ImGui::BulletText("devkitARM/libnx (32-bit)");
+                ImGui::BulletText("NNSDK");
+                ImGui::BulletText("switch-tools");
+                ImGui::BulletText("iniparser");
+                ImGui::BulletText("Dear ImGui");
             }
             if (ImGui::CollapsingHeader("Loaded Plugins")) {
                 const char *names[16];
@@ -456,6 +591,8 @@ void overlay_frame(void *cpu) {
     }
     if (cpu) forge_imgui_run(cpu, FORGE_IMGUI_FREE_RENDER);
     if (status) draw_status(scale);
+    if (notice) draw_notice(now, scale);
+    if (chat) draw_chat(line, now, scale);
     ImGui::Render();
 
     ImDrawData *dd = ImGui::GetDrawData();

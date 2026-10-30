@@ -8,6 +8,52 @@
 #include "neon_rt.h"
 #include "rt.h"
 
+// ---- bad accesses (see interp.h). The checks wrap every load / store of the interpreter: one compare of the address
+// for the null page and the range where small floats live (0x3C000000-0x43FFFFFF either sign: 0.008 .. 500);
+// everything else costs nothing. A hit is looked at in bad_access, off the common path.
+__thread uint32_t g_ip_pc, g_ip_last;
+__thread Cpu *g_ip_cpu;
+#include "kernel.h"
+
+static __attribute__((noinline, cold)) void bad_access(uint32_t a, int size, int wr) {
+    if (!g_ip_pc) return;
+    if (a < 0x10000u) {
+        forge_guest_fault(g_ip_pc, a, size, wr, "null page");
+        return;
+    }
+    if (a >= HEAP_BASE && a - HEAP_BASE < kernel_heap_size()) return;  // (heap: mapped)
+    if (!kernel_mapped(a, 1)) forge_guest_fault(g_ip_pc, a, size, wr, "float bit pattern used as an address");
+}
+
+static inline __attribute__((always_inline)) void *gchk(uint32_t a, int size, int wr) {
+    if (__builtin_expect((a < 0x10000u) | (((a & 0x7FFFFFFFu) - 0x3C000000u) < 0x08000000u), 0)) bad_access(a, size, wr);
+    return G2H(a);
+}
+#undef LD8
+#undef LD16
+#undef LD32
+#undef LD64
+#undef LDF
+#undef LDD
+#undef ST8
+#undef ST16
+#undef ST32
+#undef ST64
+#undef STF
+#undef STD
+#define LD8(a)  (*(const u8a *)gchk((a), 1, 0))
+#define LD16(a) (*(const u16u *)gchk((a), 2, 0))
+#define LD32(a) (*(const u32u *)gchk((a), 4, 0))
+#define LD64(a) (*(const u64u *)gchk((a), 8, 0))
+#define LDF(a)  (*(const f32u *)gchk((a), 4, 0))
+#define LDD(a)  (*(const f64u *)gchk((a), 8, 0))
+#define ST8(a, x)  (*(u8a *)gchk((a), 1, 1) = (uint8_t)(x))
+#define ST16(a, x) (*(u16u *)gchk((a), 2, 1) = (uint16_t)(x))
+#define ST32(a, x) (*(u32u *)gchk((a), 4, 1) = (uint32_t)(x))
+#define ST64(a, x) (*(u64u *)gchk((a), 8, 1) = (uint64_t)(x))
+#define STF(a, x)  (*(f32u *)gchk((a), 4, 1) = (x))
+#define STD(a, x)  (*(f64u *)gchk((a), 8, 1) = (x))
+
 #define BITS(w, lo, n) (((w) >> (lo)) & ((1u << (n)) - 1u))
 #define BIT(w, i) (((w) >> (i)) & 1u)
 
@@ -914,11 +960,15 @@ static void three_same(Cpu *c, uint32_t pc, uint32_t w) {
         for (uint32_t i = 0; i < k; i++) c->v.s[d * 2 + i] = t[i];
         return;
     }
-    if (A == 0xB && B && !U) {  // VPADD integer
+    if ((A == 0xB && B && !U) || (A == 0xA && size < 64)) {  // VPADD / VPMAX / VPMIN integer
         uint32_t per = 64 / size;
         uint64_t vals[16], t[8];
         for (uint32_t i = 0; i < per; i++) { vals[i] = lget(c, n, i, size); vals[per + i] = lget(c, m, i, size); }
-        for (uint32_t i = 0; i < per; i++) t[i] = (vals[2 * i] + vals[2 * i + 1]) & lmask(size);
+        for (uint32_t i = 0; i < per; i++) {
+            uint64_t a = vals[2 * i], b = vals[2 * i + 1];
+            bool gt = U ? a > b : sx(a, size) > sx(b, size);
+            t[i] = A == 0xB ? (a + b) & lmask(size) : (B ? !gt : gt) ? a : b;
+        }
         for (uint32_t i = 0; i < per; i++) lset(c, d, i, size, t[i]);
         return;
     }
@@ -1438,12 +1488,41 @@ static uint32_t code_word(uint32_t pc) {
 volatile uint32_t g_interp_watch;
 static volatile int watch_left;
 void interp_watch(uint32_t addr, int n) { watch_left = n, g_interp_watch = addr; }
+// (debug) A guest range whose reads by interpreted code (LDR / LDRB / LDRH / LDRSH / LDRSB with an immediate offset)
+// are logged, once per instruction ("interpread": host_input.c).
+static volatile uint32_t read_lo, read_hi;
+static uint32_t read_seen[256];
+static int read_nseen;
+void interp_read_watch(uint32_t lo, uint32_t hi) { read_nseen = 0, read_lo = lo, read_hi = hi; }
+static void read_check(const Cpu *c, uint32_t pc, uint32_t w) {
+    uint32_t imm;
+    if ((w & 0x0E100000u) == 0x04100000u && !(w & 0x02000000u)) imm = w & 0xFFFu;  // LDR / LDRB immediate
+    else if ((w & 0x0E5000B0u) == 0x005000B0u) imm = ((w >> 4) & 0xF0u) | (w & 0xFu);  // LDRH / LDRSH / LDRSB imm
+    else return;
+    if ((w >> 28) == 0xF) return;
+    uint32_t rn = (w >> 16) & 15, base = rn == 15 ? pc + 8 : c->r[rn];
+    uint32_t ea = (w & (1u << 24)) ? ((w & (1u << 23)) ? base + imm : base - imm) : base;
+    if (ea < read_lo || ea >= read_hi) return;
+    for (int i = 0; i < read_nseen; i++)
+        if (read_seen[i] == pc) return;
+    if (read_nseen < 256) read_seen[read_nseen++] = pc;
+    LOG("[readwatch] %08x reads %08x (+%x) = %08x (r0 %08x lr %08x)\n", pc, ea, ea - read_lo, LD32(ea & ~3u), c->r[0], c->r[14]);
+}
 
+static void interp_run_inner(Cpu *c);
 void interp_run(Cpu *c) {
+    interp_run_inner(c);
+    g_ip_pc = 0;  // (back in recompiled code or the host: a fault there is not the plugin's)
+}
+
+static void interp_run_inner(Cpu *c) {
+    g_ip_cpu = c;
     uint32_t ret = c->r[14], pc = c->pc, sp = c->r[13];
     for (;;) {
         int link;
+        g_ip_pc = g_ip_last = pc;
         uint32_t wa = g_interp_watch, before = wa ? LD32(wa) : 0;
+        if (read_hi) read_check(c, pc, code_word(pc));
         uint32_t next = interp_exec(c, pc, code_word(pc), &link);
         if (wa && LD32(wa) != before && watch_left > 0) {
             watch_left--;
@@ -1456,6 +1535,7 @@ void interp_run(Cpu *c) {
         }
         if (link) {
             c->pc = next;
+            g_ip_pc = 0;
             rt_dispatch(c);
             pc += 4;
             continue;
@@ -1463,6 +1543,7 @@ void interp_run(Cpu *c) {
         if (next == ret) return;
         uint32_t lr = c->r[14];
         c->pc = next;
+        g_ip_pc = 0;
         rt_dispatch(c);
         if (lr == ret || !interp_owns(lr)) return;
         pc = lr;

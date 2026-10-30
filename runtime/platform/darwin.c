@@ -9,6 +9,7 @@
 //   -s false` lets the handler back it.
 // - No clock_nanosleep: plat_sleep_until_ns sleeps relative to the monotonic clock.
 // - Saves go to ~/Library/Application Support/MHGURecomp.
+#include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <execinfo.h>
@@ -63,6 +64,7 @@ static bool lazy_commit(uint64_t a) {
     return atomic_load(&g_chunk[idx]) == CHUNK_READY;  // (whoever won it backed the page: resume)
 }
 
+void (*plat_touch_hook)(uint64_t guest_addr, int write);
 static void fault_handler(int sig, siginfo_t *si, void *uc);
 
 bool plat_reserve_guest(uint64_t base, uint64_t size) {
@@ -171,6 +173,16 @@ void plat_init(void) {
     }
 }
 
+unsigned long plat_process_id(void) { return (unsigned long)getpid(); }
+bool plat_wait_process(unsigned long pid) {
+    struct timespec pause = {0, 10000000};
+    for (int i = 0; i < 3000; ++i) {
+        if (kill((pid_t)pid, 0) < 0) return errno == ESRCH;
+        nanosleep(&pause, NULL);
+    }
+    return false;
+}
+
 bool plat_exe_path(char *buf, size_t size) {
     char raw[PATH_MAX];
     uint32_t n = sizeof raw;
@@ -235,6 +247,28 @@ bool plat_user_dir(char *buf, size_t size) {
     snprintf(buf, size, "%s", dir);
     return true;
 }
+
+static int count_files(const char *dir, int depth) {
+    DIR *dd = depth > 32 ? NULL : opendir(dir);
+    if (!dd) return 0;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(dd))) {
+        if (e->d_name[0] == '.') continue;
+        char sub[PATH_MAX];
+        if (snprintf(sub, sizeof sub, "%s/%s", dir, e->d_name) >= (int)sizeof sub) continue;
+        int type = e->d_type;
+        if (type == DT_UNKNOWN || type == DT_LNK) {  // (file systems without types; links: what they point at)
+            struct stat st;
+            type = stat(sub, &st) != 0 ? DT_UNKNOWN : S_ISDIR(st.st_mode) ? DT_DIR : S_ISREG(st.st_mode) ? DT_REG : DT_UNKNOWN;
+        }
+        if (type == DT_DIR) n += count_files(sub, depth + 1);
+        else if (type == DT_REG) n++;
+    }
+    closedir(dd);
+    return n;
+}
+int plat_count_files(const char *dir) { return count_files(dir, 0); }
 
 void plat_error_box(const char *msg) {
     fprintf(stderr, "\n*** %s\n", msg);
@@ -307,7 +341,14 @@ static const char *sig_name(int sig) {
 static void fault_handler(int sig, siginfo_t *si, void *uc) {
     ucontext_t *ctx = (ucontext_t *)uc;
     uint64_t fa = si && si->si_addr ? (uint64_t)(uintptr_t)si->si_addr : 0;
-    if ((sig == SIGSEGV || sig == SIGBUS) && lazy_commit(fa)) return;  // (a guest page first touched: back it, resume)
+    if ((sig == SIGSEGV || sig == SIGBUS) && lazy_commit(fa)) {  // (a guest page first touched: back it, resume)
+#if defined(__arm64__)
+        if (plat_touch_hook) plat_touch_hook(fa - g_lo, (ctx->uc_mcontext->__es.__esr >> 6) & 1);  // (ESR WnR)
+#else
+        if (plat_touch_hook) plat_touch_hook(fa - g_lo, (ctx->uc_mcontext->__es.__err & 2) != 0);
+#endif
+        return;
+    }
 #if defined(__arm64__)
     uint64_t pc = (uint64_t)ctx->uc_mcontext->__ss.__pc, lr = (uint64_t)ctx->uc_mcontext->__ss.__lr;
 #else

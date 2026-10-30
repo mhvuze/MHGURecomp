@@ -1,5 +1,5 @@
 // The Settings window (plat_settings_show: Cmd-, or Settings... in the Settings menu): every setting of
-// mhgurecomp.ini, built from the settings table (runtime/config.c g_settings).
+// mhgurecomp.ini, built from the settings table (runtime/config.c g_setting_rows).
 //
 // A tab per table tab (Display, Graphics, Controls, Multiplayer, Monster HP, Extras), a row per setting: a pop-up for
 // a fixed choice, an editable combo box with suggestions for a value, a text field for free text, and under it the
@@ -9,6 +9,7 @@
 // table, to add, change and remove.
 #import <Cocoa/Cocoa.h>
 
+#include "../app_actions.h"
 #include "../config.h"
 #include "darwin_ui.h"
 
@@ -42,7 +43,7 @@ static NSTextField *label(NSString *text, CGFloat size, bool bold, bool secondar
 
 // One setting's row: its control and the "after restart" note beside it.
 @interface MHGURow : NSObject
-@property(assign) const ConfigSetting *setting;
+@property(assign) const SettingRow *setting;
 @property(strong) NSControl *control;
 @property(strong) NSTextField *note;
 @end
@@ -60,6 +61,7 @@ static NSTextField *label(NSString *text, CGFloat size, bool bold, bool secondar
 @property(strong) NSSegmentedControl *questButtons;  // + / -
 @property(strong) NSMutableArray<NSSlider *> *hunterSliders;
 @property(strong) NSMutableArray<NSTextField *> *hunterFields;
+@property(strong) NSString *lastHelp;  // (the row above's: rows that share it, as the keybinds, show it once)
 @end
 
 static MHGUSettingsWindow *g_settings_window;
@@ -67,7 +69,7 @@ static MHGUSettingsWindow *g_settings_window;
 @implementation MHGUSettingsWindow
 
 // ---- values
-- (NSString *)valueOf:(const ConfigSetting *)st {
+- (NSString *)valueOf:(const SettingRow *)st {
     char now[256] = "";
     config_get(st->key, now, sizeof now);
     return str(now);
@@ -75,7 +77,7 @@ static MHGUSettingsWindow *g_settings_window;
 
 - (void)reload {
     for (MHGURow *row in self.rows) {
-        const ConfigSetting *st = row.setting;
+        const SettingRow *st = row.setting;
         NSString *now = [self valueOf:st];
         if ([row.control isKindOfClass:NSPopUpButton.class]) {
             NSPopUpButton *p = (NSPopUpButton *)row.control;
@@ -100,7 +102,7 @@ static MHGUSettingsWindow *g_settings_window;
 }
 
 - (void)apply:(MHGURow *)row value:(NSString *)value {
-    const ConfigSetting *st = row.setting;
+    const SettingRow *st = row.setting;
     if (config_same_value(st->key, [self valueOf:st].UTF8String, value.UTF8String)) return;
     if (!config_set(st->key, value.UTF8String)) {  // (not a value it takes: refused, the file's value shown again)
         NSBeep();
@@ -457,7 +459,7 @@ static NSView *people(int n) {
 }
 
 // ---- building
-- (NSControl *)controlFor:(const ConfigSetting *)st {
+- (NSControl *)controlFor:(const SettingRow *)st {
     NSArray<NSString *> *values = split(st->choices), *labels = split(st->labels);
     if (labels.count != values.count) labels = values;
     if (st->kind == SETTING_CHOICE) {
@@ -490,7 +492,7 @@ static NSView *people(int n) {
     return f;
 }
 
-- (NSView *)rowView:(const ConfigSetting *)st {
+- (NSView *)rowView:(const SettingRow *)st {
     MHGURow *row = [MHGURow new];
     row.setting = st;
     row.control = [self controlFor:st];
@@ -507,7 +509,8 @@ static NSView *people(int n) {
     box.alignment = NSLayoutAttributeLeading;
     box.spacing = 3;
     char help[2048];
-    if (config_help(st->key, help, sizeof help)) {
+    if (config_help(st->key, help, sizeof help) && ![str(help) isEqual:self.lastHelp]) {
+        self.lastHelp = str(help);
         NSTextField *h = label(str(help), 11, false, true);
         h.preferredMaxLayoutWidth = 470;
         NSStackView *indent = [NSStackView stackViewWithViews:@[ h ]];
@@ -520,17 +523,18 @@ static NSView *people(int n) {
 - (NSView *)tabView:(NSString *)tab {
     if ([tab isEqual:@"Monster HP"]) return [self scrolled:[self monsterHPView]];
     NSStackView *stack = [NSStackView stackViewWithViews:@[]];
+    self.lastHelp = nil;
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
     stack.spacing = 14;
     stack.edgeInsets = NSEdgeInsetsMake(16, 16, 16, 16);
     int sections = 0;
     const char *section = "";
-    for (int i = 0; i < g_nsettings; i++)
-        if ([str(g_settings[i].tab) isEqual:tab] && strcmp(g_settings[i].section, section)) sections++, section = g_settings[i].section;
+    for (int i = 0; i < g_nsetting_rows; i++)
+        if ([str(g_setting_rows[i].tab) isEqual:tab] && strcmp(g_setting_rows[i].section, section)) sections++, section = g_setting_rows[i].section;
     section = "";
-    for (int i = 0; i < g_nsettings; i++) {
-        const ConfigSetting *st = &g_settings[i];
+    for (int i = 0; i < g_nsetting_rows; i++) {
+        const SettingRow *st = &g_setting_rows[i];
         if (![str(st->tab) isEqual:tab]) continue;
         if (sections > 1 && strcmp(st->section, section)) [stack addArrangedSubview:label(str(st->section), 13, true, false)];
         section = st->section;
@@ -579,8 +583,8 @@ static NSView *people(int n) {
 
     NSTabView *tabs = [[NSTabView alloc] init];
     NSMutableArray<NSString *> *names = [NSMutableArray array];
-    for (int i = 0; i < g_nsettings; i++)
-        if (![names containsObject:str(g_settings[i].tab)]) [names addObject:str(g_settings[i].tab)];
+    for (int i = 0; i < g_nsetting_rows; i++)
+        if (![names containsObject:str(g_setting_rows[i].tab)]) [names addObject:str(g_setting_rows[i].tab)];
     for (NSString *name in names) {
         NSTabViewItem *item = [[NSTabViewItem alloc] initWithIdentifier:name];
         item.label = name;
@@ -607,7 +611,7 @@ static NSView *people(int n) {
 }
 
 - (void)windowDidBecomeKey:(NSNotification *)n { (void)n; [self reload]; }
-- (void)restart:(id)sender { (void)sender; plat_restart_game(); }
+- (void)restart:(id)sender { (void)sender; ui_request_action(true); }
 - (void)edit:(id)sender { (void)sender; plat_edit_settings(); }
 - (void)folder:(id)sender { (void)sender; plat_open_home(); }
 @end

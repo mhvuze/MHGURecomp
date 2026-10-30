@@ -7,8 +7,6 @@
 // 8-byte stack slot) and which are floats (s registers). The implementations then see the arguments the way the
 // AArch64 ABI would hand them over: integer-class arguments in order as A(i), floating point in order as AF(i).
 #pragma once
-#include <stdatomic.h>
-
 #include "../hle.h"
 #include "tegra.h"
 
@@ -104,9 +102,6 @@ typedef struct NvnProgram {
     uint32_t stage_mask;
     void *backend;
 } NvnProgram;
-#define PROGRAMS_MAX 16384
-extern NvnProgram *g_programs[PROGRAMS_MAX];  // the graphics programs set up so far (objects.c), in order
-extern _Atomic int g_nprograms;
 
 typedef struct NvnWindow {
     uint64_t textures[8];  // guest NVNtexture*
@@ -177,6 +172,8 @@ void backend_execute(uint64_t handle);            // run a recorded command list
 void backend_present(NvnTexture *tex);            // show a texture in the window
 void backend_texture_destroyed(NvnTexture *tex);
 void backend_pool_written(uint64_t addr, uint64_t size);
+void backend_program_created(const NvnProgram *p);  // nvnProgramSetShaders (the renderer may prepare it ahead of use)
+void backend_photo_requested(void);  // the game asked for its quest photo (tools/gen.py: 0xa6f97c): drawn in the next frames
 void renderer_sync(void);
 uint64_t renderer_fence_seq(void);
 void renderer_wait_seq(uint64_t seq);

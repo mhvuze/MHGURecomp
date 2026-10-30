@@ -286,6 +286,13 @@ def main():
         for d in ("exefs", "romfs"):
             subprocess.run(["cp", "-cR", os.path.join(game, d), os.path.join(data, d)], check=True)
         os.symlink("../Resources/data", os.path.join(macos, "data"))
+    # the pipelines recorded in the common areas, built in the background on a first run (make's pipelist; the
+    # runtime reads it from Resources in an app: runtime/nvn/vulkan/exec.c plist_load)
+    plist = os.path.join(REPO, "extras", "pipelines.list")
+    if os.path.isfile(plist):
+        shutil.copy2(plist, os.path.join(resources, "pipelines.list"))
+    elif a.release:
+        sys.exit("make_app: no extras/pipelines.list")
     if bonus:
         os.makedirs(os.path.join(resources, "bonus"))
         shutil.copy2(bonus, os.path.join(resources, "bonus", "system"))

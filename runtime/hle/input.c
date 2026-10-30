@@ -5,6 +5,7 @@
 
 #include "../hle.h"
 #include "../kernel.h"
+#include "chat.h"
 #include "input.h"
 #include "../net/net.h"
 
@@ -25,20 +26,11 @@ void input_get(uint64_t *buttons, int32_t sticks[4]) {
     for (int i = 0; i < 4; i++) sticks[i] = g_sticks[i];
 }
 
-// NpadFullKeyState (and the other styles: same layout): i64 sampling, u64 buttons, left stick {i32 x, y}, right
-// stick, u32 attributes. GetNpadState(state *, const NpadId &)
-static void fill_state(Cpu *c) {
-    emsync_tick();  // (multiplayer small monster sync: on the game's thread, once a frame is plenty)
-    hpscale_tick();  // (the hub host's [Monster HP] settings to the others)
-    uint8_t *s = ARGP(0);
-    uint32_t id = LD32(ARG(1));
-    memset(s, 0, 40);
-    int64_t n = __atomic_add_fetch(&sampling, 1, __ATOMIC_RELAXED);
-    memcpy(s, &n, 8);
-    if (id != 0) return;  // docked: only player 1
+// The state of player 1's pad as GetNpadState gives it: the buttons (a stick tilted past half is also a button, bits
+// 16-23) and the four sticks
+uint64_t input_npad_state(int32_t sticks[4]) {
     uint64_t b = g_buttons;
     int32_t lx = g_sticks[0], ly = g_sticks[1], rx = g_sticks[2], ry = g_sticks[3];
-    // stick directions also appear as buttons (bits 16-23)
     if (lx < -16000) b |= 1ull << 16;
     if (ly > 16000) b |= 1ull << 17;
     if (lx > 16000) b |= 1ull << 18;
@@ -47,6 +39,25 @@ static void fill_state(Cpu *c) {
     if (ry > 16000) b |= 1ull << 21;
     if (rx > 16000) b |= 1ull << 22;
     if (ry < -16000) b |= 1ull << 23;
+    sticks[0] = lx, sticks[1] = ly, sticks[2] = rx, sticks[3] = ry;
+    return b;
+}
+
+// NpadFullKeyState (and the other styles: same layout): i64 sampling, u64 buttons, left stick {i32 x, y}, right
+// stick, u32 attributes. GetNpadState(state *, const NpadId &)
+static void fill_state(Cpu *c) {
+    emsync_tick();  // (multiplayer small monster sync: on the game's thread, once a frame is plenty)
+    hpscale_tick();  // (the hub host's [Monster HP] settings to the others)
+    chat_tick(c);  // (a line typed after "/": sent as a shoutout is, runtime/hle/chat.c)
+    uint8_t *s = ARGP(0);
+    uint32_t id = LD32(ARG(1));
+    memset(s, 0, 40);
+    int64_t n = __atomic_add_fetch(&sampling, 1, __ATOMIC_RELAXED);
+    memcpy(s, &n, 8);
+    if (id != 0) return;  // docked: only player 1
+    int32_t st[4];
+    uint64_t b = input_npad_state(st);
+    int32_t lx = st[0], ly = st[1], rx = st[2], ry = st[3];
     memcpy(s + 8, &b, 8);
     memcpy(s + 16, &lx, 4);
     memcpy(s + 20, &ly, 4);

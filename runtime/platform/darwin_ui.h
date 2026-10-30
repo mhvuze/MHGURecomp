@@ -9,7 +9,6 @@ static inline NSString *str(const char *s) { return [NSString stringWithUTF8Stri
 static inline NSArray<NSString *> *split(const char *s) { return s ? [str(s) componentsSeparatedByString:@"|"] : @[]; }
 #endif
 
-void plat_restart_game(void);       // start the game again once this process has ended, then close the window
 void plat_edit_settings(void);      // the settings file in TextEdit
 void plat_open_home(void);          // the settings folder (the game's home: mods/, cheats/, log.txt...) in Finder
 const char *plat_home(void);        // that folder
