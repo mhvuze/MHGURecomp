@@ -77,6 +77,7 @@
     .hdr_bloom = 100.0f,                                                                        \
     .hdr_scene = 1,                                                                             \
     .hdr_format = HDR_FORMAT_AUTO,                                                              \
+    .hdr_analysis = 0,                                                                          \
     /* [Performance] */                                                                             \
     .show_fps = 0,                                                                                  \
     .show_battery = BATTERY_OFF,                                                                    \
@@ -100,6 +101,7 @@
     .ldn_join = "",                                                                                 \
     .ldn_server = "",                                                                               \
     .ldn_key = "",                                                                                  \
+    .ldn_direct = 1,                                                                                \
     .sync_small_monsters = 1,                                                                       \
     .share_urgent = 1,                                                                              \
     /* [Monster HP, Village Quests] */                                                              \
@@ -291,6 +293,11 @@ static const char DEFAULT_INI[] =
     "; Default: Auto\n"
     "HDRFormat = Auto\n"
     "\n"
+    "; Shows an HDR analysis over the game: the picture's brightness in nits (maximum, average, minimum, the middle of\n"
+    "; the screen), the colour gamut it uses and a waveform of its brightness across the screen, as the display gets it\n"
+    "; Default: Off\n"
+    "Analysis = Off\n"
+    "\n"
     "[Performance]\n"
     "; Show the frame rate (FPS) in a small box on the screen. Drag it with the mouse while the settings menu is open\n"
     "; Default: Off\n"
@@ -410,6 +417,13 @@ static const char DEFAULT_INI[] =
     "; On Android, empty means public among Android players only: to play with friends on PC, all enter the same key.\n"
     "; Default:\n"
     "Key =\n"
+    "\n"
+    "; Direct = On: in an internet hub, your game and the host's send their packets straight to each other when both\n"
+    "; routers let them (the hub server helps them find each other), for a lower ping; else they go through the hub\n"
+    "; server. Direct means the other player's game sees your IP address (as on the Switch). Off: always through the hub\n"
+    "; server, nobody sees your address. Both ends need it On for a direct connection.\n"
+    "; Default: On\n"
+    "Direct = On\n"
     "\n"
     "; Sync small monsters between players in multiplayer. Everyone in the hunt should use the same setting.\n"
     "; Default: On\n"
@@ -604,6 +618,7 @@ const SettingRow g_setting_rows[] = {
     {"HDR", "HDR", "HighlightSaturation", "Highlight Saturation", SETTING_VALUE, "0|25|50|82|100", NULL, true, false},
     {"HDR", "HDR", "Flare", "Flare", SETTING_VALUE, "0|5|10|25|50", NULL, true, false},
     {"HDR", "HDR", "Bloom", "Bloom", SETTING_VALUE, "0|25|50|75|100", NULL, true, false},
+    {"HDR", "HDR", "Analysis", "HDR Analysis", SETTING_CHOICE, ONOFF, NULL, true, false},
     {"Graphics", "Performance", "ShowFPS", "Show FPS", SETTING_CHOICE, ONOFF, NULL, true, true},
     {"Graphics", "Performance", "FPS", "Frame Rate Cap", SETTING_VALUE, "30|60|90|120|144|240", NULL, true, true},
     {"Graphics", "Performance", "VSync", "VSync", SETTING_CHOICE, ONOFF, NULL, true, true},
@@ -614,8 +629,8 @@ const SettingRow g_setting_rows[] = {
     {"Controls", "Controls", "MenuConfirm", "Confirm in the F1 Menu", SETTING_CHOICE, "Original|South|East",
      "As in the Game|South (bottom button)|East (right button)", true, false},
     {"Controls", "Controls", "BackgroundInput", "Controller in the Background", SETTING_CHOICE, ONOFF, NULL, true, true},
-    {"Controls", "Controls", "MenuChord", "Plus + Minus Opens the F1 Menu", SETTING_CHOICE, ONOFF, NULL, true, false},
     {"Controls", "Controls", "ComboInputWindow", "Two-Button Inputs", SETTING_CHOICE, "Lenient|Strict", NULL, true, false},
+    {"Controls", "Controls", "MenuChord", "Plus + Minus Opens the F1 Menu", SETTING_CHOICE, ONOFF, NULL, true, false},
     {"Controls", "Controls", "ChatKey", "Chat Key", SETTING_VALUE, "/|T|Y|Return", NULL, true, false},
     {"Controls", "Mouse", "MouseSensitivity", "Mouse Sensitivity", SETTING_VALUE, "0.5|0.75|1.0|1.5|2.0|3.0", NULL, true, true},
     KEYBIND("MoveUp", "Move Up"),
@@ -645,6 +660,7 @@ const SettingRow g_setting_rows[] = {
     {"Multiplayer", "Multiplayer", "Join", "Join Addresses", SETTING_TEXT, NULL, NULL, true, false},
     {"Multiplayer", "Multiplayer", "Server", "Hub Server", SETTING_TEXT, NULL, NULL, true, false},
     {"Multiplayer", "Multiplayer", "Key", "Matchmaking Key", SETTING_TEXT, NULL, NULL, true, false},
+    {"Multiplayer", "Multiplayer", "Direct", "Direct Connections", SETTING_CHOICE, ONOFF, NULL, true, false},
     {"Multiplayer", "Multiplayer", "SyncSmallMonsters", "Sync Small Monsters", SETTING_CHOICE, ONOFF, NULL, false, true},
     {"Multiplayer", "Multiplayer", "ShareUrgentCredit", "Shared Urgent Quest Credit", SETTING_CHOICE, ONOFF, NULL, true, true},
     {"Multiplayer", "Multiplayer", "RyuServers", "Ryujinx LDN Servers", SETTING_TEXT, NULL, NULL, true, false},
@@ -841,6 +857,7 @@ const ConfigSetting g_settings[] = {
     {"HDR", "Flare", SET_FLOAT, F(hdr_flare), 0, 0.0f, 100.0f, NULL, NULL, false, ERR_HDR},
     {"HDR", "Bloom", SET_FLOAT, F(hdr_bloom), 0, 0.0f, 100.0f, NULL, NULL, false, ERR_HDR},
     ON_OFF("HDR", "UnclampedScene", hdr_scene, false),
+    ON_OFF("HDR", "Analysis", hdr_analysis, false),
     {"HDR", "HDRFormat", SET_CHOICE, F(hdr_format), 0, 0, 0, "Auto,HDR10|pq,scRGB|fp16", NULL, false, ERR_HDR},
     ON_OFF("Performance", "ShowFPS", show_fps, false),
     {"Performance", "ShowBattery", SET_CHOICE, F(show_battery), 0, 0, 0, "Off,WithFPS,ByItself", NULL, false, ERR_MISC},
@@ -868,6 +885,7 @@ const ConfigSetting g_settings[] = {
     {"Multiplayer", "Join", SET_TEXT, F(ldn_join), sizeof g_config.ldn_join, 0, 0, NULL, NULL, false, ERR_NET},
     {"Multiplayer", "Server", SET_TEXT, F(ldn_server), sizeof g_config.ldn_server, 0, 0, NULL, NULL, false, ERR_SERVER},
     {"Multiplayer", "Key", SET_TEXT, F(ldn_key), sizeof g_config.ldn_key, 0, 0, NULL, NULL, false, ERR_SERVER},
+    ON_OFF("Multiplayer", "Direct", ldn_direct, false),
     ON_OFF("Multiplayer", "SyncSmallMonsters", sync_small_monsters, false),
     ON_OFF("Multiplayer", "ShareUrgentCredit", share_urgent, false),
     {"Monster HP", "1Player|1Players", SET_FACTOR, F(hp.scale[0]), 0, HP_SCALE_MIN, HP_SCALE_MAX, NULL, NULL, false, ERR_HP},
@@ -1330,6 +1348,7 @@ void config_load(void) {
     if ((e = getenv("MHGU_LDN_JOIN"))) snprintf(g_config.ldn_join, sizeof g_config.ldn_join, "%s", e);
     if ((e = getenv("MHGU_LDN_SERVER"))) snprintf(g_config.ldn_server, sizeof g_config.ldn_server, "%s", e);
     if ((e = getenv("MHGU_LDN_KEY"))) snprintf(g_config.ldn_key, sizeof g_config.ldn_key, "%s", e);
+    if ((e = getenv("MHGU_LDN_DIRECT"))) g_config.ldn_direct = atoi(e) != 0;
     if ((e = getenv("MHGU_LDN_RYU"))) snprintf(g_config.ldn_ryu_servers, sizeof g_config.ldn_ryu_servers, "%s", e);
     if ((e = getenv("MHGU_LDN_RYU_HOST"))) snprintf(g_config.ldn_ryu_host, sizeof g_config.ldn_ryu_host, "%s", e);
     if ((e = getenv("MHGU_LDN_ROOM"))) snprintf(g_config.ldn_room_server, sizeof g_config.ldn_room_server, "%s", e);

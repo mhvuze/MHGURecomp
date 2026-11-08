@@ -81,6 +81,8 @@ typedef struct {
     int combo_window;         // [Controls] ComboInputWindow: COMBO_*, how long a press waits for a second button
     char ldn_server[256];     // [Multiplayer] Server: hub server for internet hubs (host[:port]); "" the default, "Off" none
     char ldn_key[64];         // [Multiplayer] Key: matchmaking key, hubs seen only by players with the same; "" public
+    int ldn_direct;           // [Multiplayer] Direct: in an internet hub, game packets go straight between the players when
+                              // their routers let them (hole punching; they see each other's IP address), else through the server
     char chat_key[32];        // [Controls] ChatKey: the key that opens a line of chat (runtime/hle/chat.c), by SDL's
                               // name for it ("/", "Y"...); "" none
     int fxaa_mode;            // [Anti-aliasing] FXAAMode: FXAA_*, which FXAA draws while FXAA is on
@@ -104,6 +106,7 @@ typedef struct {
     float hdr_bloom;          // [HDR] Bloom: the game's bloom strength, 0 .. 100 %
     int hdr_scene;            // [HDR] UnclampedScene: the render-size scene targets as RGBA16F too (not only the post chain)
     int hdr_format;           // [HDR] HDRFormat: HDR_FORMAT_*, the window image's format (ini only)
+    int hdr_analysis;         // [HDR] Analysis: the HDR analysis overlay (nvn/vulkan/hdr.c, overlay.cpp)
     int binds[BINDS][BIND_KEYS];  // [Keybinds]: BIND_* -> its keys (an SDL scancode or KEY_MOUSE + button; 0 none)
     int menu_theme;           // [Application] Theme: THEME_*, the settings menu's colours (runtime/settings_panel.cpp)
     int discord;              // [Discord] RichPresence: what you play, on your Discord profile (runtime/net/discord.c)
@@ -198,6 +201,7 @@ bool config_validate(const Config *config, char *error, size_t error_size);
 // Immutable boot settings stay in g_config. These getters are atomic live values.
 void config_runtime_init(const Config *effective); // After environment/Auto resolution at startup.
 float config_live_fps(void);
+void config_set_live_fps(float fps);
 float config_live_fov(void);
 float config_live_mouse_sensitivity(void);
 float config_live_draw_distance(void);
@@ -222,6 +226,7 @@ float config_live_hdr_ui(void);
 int config_live_hdr_tonemap(void);
 int config_live_hdr_gamma(void);
 int config_live_hdr_scene(void);
+int config_live_hdr_analysis(void);
 float config_live_hdr_exposure(void);
 float config_live_hdr_highlights(void);
 float config_live_hdr_shadows(void);
@@ -237,6 +242,7 @@ float config_live_hp_village(void);     // [Village Quests] HubHP as saved now
 int config_live_village_in_hub(void);   // [Village Quests] VillageQuestsInHub (hle/villagehub.c)
 int config_live_ldn_port(void);         // [Multiplayer] Port: the next hub hosted and the next search (net/ldn.c)
 void config_live_ldn_join(char *join, size_t size);  // [Multiplayer] Join: the next search (net/ldn.c)
+int config_live_ldn_direct(void);  // [Multiplayer] Direct (net/ldn.c: for the next player link)
 int config_live_sync_small_monsters(void);  // [Multiplayer] SyncSmallMonsters (net/emsync.c)
 int config_live_bonus_content(void);    // [Bonus Content] BonusContent: each time the game opens a save (services/bonus.c)
 int config_live_discord(void);         // [Discord] RichPresence
