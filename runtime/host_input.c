@@ -906,6 +906,9 @@ void host_input_event(const SDL_Event *e) {
                 g_burst_left = 8;
             } else if (e->key.scancode == SDL_SCANCODE_F10) {
                 g_dump_request = 2;  // (debug) every render pass of the next 2 frames, as "dump 2"
+            } else if (e->key.scancode == SDL_SCANCODE_F6) {  // (prototype) Switch-style lava flicker on / off
+                void lavaflicker_toggle(void);
+                lavaflicker_toggle();
             } else if (e->key.scancode == SDL_SCANCODE_F7) {  // MSAA off / 2x / 4x / 8x (to compare; the settings set it)
                 void vk_cycle_msaa(void);
                 vk_cycle_msaa();
